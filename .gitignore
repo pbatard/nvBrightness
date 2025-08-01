@@ -34,6 +34,7 @@
 *.o_manifest
 .deps
 .libs
+.vs/*/*
 arm
 arm64
 x64
