@@ -1,0 +1,6 @@
+1. Create SVG
+2. Use InkScape to export Document to 64x64 PNG (since ImageMagick SVG direct conversion is crap!)
+   Make sure to export Document and *not* Page to have the largest size.
+3. Use ImageMagick to convert exported PNG to ICO:
+   mogrify -format ico -background transparent -define 'icon:auto-resize=64' *.png
+   convert -background transparent -define 'icon:auto-resize=64' 75.png 75.ico

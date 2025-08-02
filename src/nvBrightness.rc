@@ -1,0 +1,159 @@
+// Microsoft Visual C++ generated resource script.
+//
+#include "resource.h"
+
+#define APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 2 resource.
+//
+#ifndef _USING_V110_SDK71_
+#define _USING_V110_SDK71_
+#endif
+#include <windows.h>
+
+/////////////////////////////////////////////////////////////////////////////
+#undef APSTUDIO_READONLY_SYMBOLS
+
+/////////////////////////////////////////////////////////////////////////////
+// Neutral resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_NEU)
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+#pragma code_page(1252)
+
+#ifdef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// TEXTINCLUDE
+//
+
+1 TEXTINCLUDE
+BEGIN
+    "resource.h\0"
+END
+
+2 TEXTINCLUDE
+BEGIN
+    "#ifndef _USING_V110_SDK71_\r\n"
+    "#define _USING_V110_SDK71_\r\n"
+    "#endif\r\n"
+    "#include <windows.h>\r\n"
+    "#endif\r\n"
+    "\0"
+END
+
+3 TEXTINCLUDE
+BEGIN
+    "\r\n"
+    "IDI_ICON_00             RCDATA                  ""../icons/00.ico""\r\n"
+    "IDI_ICON_05             RCDATA                  ""../icons/05.ico""\r\n"
+    "IDI_ICON_10             RCDATA                  ""../icons/10.ico""\r\n"
+    "IDI_ICON_15             RCDATA                  ""../icons/15.ico""\r\n"
+    "IDI_ICON_20             RCDATA                  ""../icons/20.ico""\r\n"
+    "IDI_ICON_25             RCDATA                  ""../icons/25.ico""\r\n"
+    "IDI_ICON_30             RCDATA                  ""../icons/30.ico""\r\n"
+    "IDI_ICON_35             RCDATA                  ""../icons/35.ico""\r\n"
+    "IDI_ICON_40             RCDATA                  ""../icons/40.ico""\r\n"
+    "IDI_ICON_45             RCDATA                  ""../icons/45.ico""\r\n"
+    "IDI_ICON_50             RCDATA                  ""../icons/50.ico""\r\n"
+    "IDI_ICON_55             RCDATA                  ""../icons/55.ico""\r\n"
+    "IDI_ICON_60             RCDATA                  ""../icons/60.ico""\r\n"
+    "IDI_ICON_65             RCDATA                  ""../icons/65.ico""\r\n"
+    "IDI_ICON_70             RCDATA                  ""../icons/70.ico""\r\n"
+    "IDI_ICON_75             RCDATA                  ""../icons/75.ico""\r\n"
+    "IDI_ICON_80             RCDATA                  ""../icons/80.ico""\r\n"
+    "IDI_ICON_85             RCDATA                  ""../icons/85.ico""\r\n"
+    "IDI_ICON_90             RCDATA                  ""../icons/90.ico""\r\n"
+    "IDI_ICON_95             RCDATA                  ""../icons/95.ico""\r\n"
+    "IDI_ICON_100            RCDATA                  ""../icons/100.ico""\r\n"
+    "\r\n"
+    "\0"
+END
+
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Icon
+//
+
+// Icon with lowest ID value placed first to ensure application icon
+// remains consistent on all systems.
+IDI_ICON                ICON                    "..\\icons\\app.ico"
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "000004b0"
+        BEGIN
+            VALUE "CompanyName", "Akeo Consulting"
+            VALUE "FileDescription", "nvBrightness"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "InternalName", "nvbrightness.exe"
+            VALUE "LegalCopyright", "© 2025 Pete Batard <pete@akeo.ie>"
+            VALUE "OriginalFilename", "nvbrightness.exe"
+            VALUE "ProductName", "nvBrightness"
+            VALUE "ProductVersion", "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0, 1200
+    END
+END
+
+#endif    // Neutral resources
+/////////////////////////////////////////////////////////////////////////////
+
+
+
+#ifndef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 3 resource.
+//
+IDI_ICON_00             RCDATA                  "../icons/00.ico"
+IDI_ICON_05             RCDATA                  "../icons/05.ico"
+IDI_ICON_10             RCDATA                  "../icons/10.ico"
+IDI_ICON_15             RCDATA                  "../icons/15.ico"
+IDI_ICON_20             RCDATA                  "../icons/20.ico"
+IDI_ICON_25             RCDATA                  "../icons/25.ico"
+IDI_ICON_30             RCDATA                  "../icons/30.ico"
+IDI_ICON_35             RCDATA                  "../icons/35.ico"
+IDI_ICON_40             RCDATA                  "../icons/40.ico"
+IDI_ICON_45             RCDATA                  "../icons/45.ico"
+IDI_ICON_50             RCDATA                  "../icons/50.ico"
+IDI_ICON_55             RCDATA                  "../icons/55.ico"
+IDI_ICON_60             RCDATA                  "../icons/60.ico"
+IDI_ICON_65             RCDATA                  "../icons/65.ico"
+IDI_ICON_70             RCDATA                  "../icons/70.ico"
+IDI_ICON_75             RCDATA                  "../icons/75.ico"
+IDI_ICON_80             RCDATA                  "../icons/80.ico"
+IDI_ICON_85             RCDATA                  "../icons/85.ico"
+IDI_ICON_90             RCDATA                  "../icons/90.ico"
+IDI_ICON_95             RCDATA                  "../icons/95.ico"
+IDI_ICON_100            RCDATA                  "../icons/100.ico"
+
+/////////////////////////////////////////////////////////////////////////////
+#endif    // not APSTUDIO_INVOKED
+

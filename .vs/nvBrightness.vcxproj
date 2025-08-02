@@ -223,13 +223,37 @@
     <ClCompile Include="..\src\nvBrightness.c" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="..\src\version.rc" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="..\src\resource.h" />
+    <ClInclude Include="..\src\tray.h" />
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="..\src\nvBrightness.manifest" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="..\src\nvBrightness.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="..\icons\00.ico" />
+    <Image Include="..\icons\05.ico" />
+    <Image Include="..\icons\10.ico" />
+    <Image Include="..\icons\100.ico" />
+    <Image Include="..\icons\15.ico" />
+    <Image Include="..\icons\20.ico" />
+    <Image Include="..\icons\25.ico" />
+    <Image Include="..\icons\30.ico" />
+    <Image Include="..\icons\35.ico" />
+    <Image Include="..\icons\40.ico" />
+    <Image Include="..\icons\45.ico" />
+    <Image Include="..\icons\50.ico" />
+    <Image Include="..\icons\55.ico" />
+    <Image Include="..\icons\60.ico" />
+    <Image Include="..\icons\65.ico" />
+    <Image Include="..\icons\70.ico" />
+    <Image Include="..\icons\75.ico" />
+    <Image Include="..\icons\80.ico" />
+    <Image Include="..\icons\85.ico" />
+    <Image Include="..\icons\90.ico" />
+    <Image Include="..\icons\95.ico" />
+    <Image Include="..\src\icon1.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
