@@ -37,5 +37,6 @@
 .vs/*/*
 arm
 arm64
+docs
 x64
 x86

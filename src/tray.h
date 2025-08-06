@@ -31,7 +31,7 @@
 struct tray_menu;
 
 struct tray {
-	wchar_t* icon;
+	HICON icon;
 	struct tray_menu* menu;
 };
 
@@ -175,12 +175,10 @@ static void tray_update(struct tray* tray) {
 	UINT id = ID_TRAY_FIRST;
 	hmenu = _tray_menu(tray->menu, &id);
 	SendMessage(hwnd, WM_INITMENUPOPUP, (WPARAM)hmenu, 0);
-	HICON icon;
-	ExtractIconEx(tray->icon, 0, NULL, &icon, 1);
 	if (nid.hIcon) {
 		DestroyIcon(nid.hIcon);
 	}
-	nid.hIcon = icon;
+	nid.hIcon = tray->icon;
 	Shell_NotifyIcon(NIM_MODIFY, &nid);
 
 	if (prevmenu != NULL) {

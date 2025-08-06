@@ -46,28 +46,6 @@ END
 3 TEXTINCLUDE
 BEGIN
     "\r\n"
-    "IDI_ICON_00             RCDATA                  ""../icons/00.ico""\r\n"
-    "IDI_ICON_05             RCDATA                  ""../icons/05.ico""\r\n"
-    "IDI_ICON_10             RCDATA                  ""../icons/10.ico""\r\n"
-    "IDI_ICON_15             RCDATA                  ""../icons/15.ico""\r\n"
-    "IDI_ICON_20             RCDATA                  ""../icons/20.ico""\r\n"
-    "IDI_ICON_25             RCDATA                  ""../icons/25.ico""\r\n"
-    "IDI_ICON_30             RCDATA                  ""../icons/30.ico""\r\n"
-    "IDI_ICON_35             RCDATA                  ""../icons/35.ico""\r\n"
-    "IDI_ICON_40             RCDATA                  ""../icons/40.ico""\r\n"
-    "IDI_ICON_45             RCDATA                  ""../icons/45.ico""\r\n"
-    "IDI_ICON_50             RCDATA                  ""../icons/50.ico""\r\n"
-    "IDI_ICON_55             RCDATA                  ""../icons/55.ico""\r\n"
-    "IDI_ICON_60             RCDATA                  ""../icons/60.ico""\r\n"
-    "IDI_ICON_65             RCDATA                  ""../icons/65.ico""\r\n"
-    "IDI_ICON_70             RCDATA                  ""../icons/70.ico""\r\n"
-    "IDI_ICON_75             RCDATA                  ""../icons/75.ico""\r\n"
-    "IDI_ICON_80             RCDATA                  ""../icons/80.ico""\r\n"
-    "IDI_ICON_85             RCDATA                  ""../icons/85.ico""\r\n"
-    "IDI_ICON_90             RCDATA                  ""../icons/90.ico""\r\n"
-    "IDI_ICON_95             RCDATA                  ""../icons/95.ico""\r\n"
-    "IDI_ICON_100            RCDATA                  ""../icons/100.ico""\r\n"
-    "\r\n"
     "\0"
 END
 
@@ -81,7 +59,28 @@ END
 
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
-IDI_ICON                ICON                    "..\\icons\\app.ico"
+IDI_ICON                ICON                    "../icons/app.ico"
+IDI_ICON_00             ICON                    "../icons/00.ico"
+IDI_ICON_05             ICON                    "../icons/05.ico"
+IDI_ICON_10             ICON                    "../icons/10.ico"
+IDI_ICON_15             ICON                    "../icons/15.ico"
+IDI_ICON_20             ICON                    "../icons/20.ico"
+IDI_ICON_25             ICON                    "../icons/25.ico"
+IDI_ICON_30             ICON                    "../icons/30.ico"
+IDI_ICON_35             ICON                    "../icons/35.ico"
+IDI_ICON_40             ICON                    "../icons/40.ico"
+IDI_ICON_45             ICON                    "../icons/45.ico"
+IDI_ICON_50             ICON                    "../icons/50.ico"
+IDI_ICON_55             ICON                    "../icons/55.ico"
+IDI_ICON_60             ICON                    "../icons/60.ico"
+IDI_ICON_65             ICON                    "../icons/65.ico"
+IDI_ICON_70             ICON                    "../icons/70.ico"
+IDI_ICON_75             ICON                    "../icons/75.ico"
+IDI_ICON_80             ICON                    "../icons/80.ico"
+IDI_ICON_85             ICON                    "../icons/85.ico"
+IDI_ICON_90             ICON                    "../icons/90.ico"
+IDI_ICON_95             ICON                    "../icons/95.ico"
+IDI_ICON_100            ICON                    "../icons/100.ico"
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -132,27 +131,6 @@ END
 //
 // Generated from the TEXTINCLUDE 3 resource.
 //
-IDI_ICON_00             RCDATA                  "../icons/00.ico"
-IDI_ICON_05             RCDATA                  "../icons/05.ico"
-IDI_ICON_10             RCDATA                  "../icons/10.ico"
-IDI_ICON_15             RCDATA                  "../icons/15.ico"
-IDI_ICON_20             RCDATA                  "../icons/20.ico"
-IDI_ICON_25             RCDATA                  "../icons/25.ico"
-IDI_ICON_30             RCDATA                  "../icons/30.ico"
-IDI_ICON_35             RCDATA                  "../icons/35.ico"
-IDI_ICON_40             RCDATA                  "../icons/40.ico"
-IDI_ICON_45             RCDATA                  "../icons/45.ico"
-IDI_ICON_50             RCDATA                  "../icons/50.ico"
-IDI_ICON_55             RCDATA                  "../icons/55.ico"
-IDI_ICON_60             RCDATA                  "../icons/60.ico"
-IDI_ICON_65             RCDATA                  "../icons/65.ico"
-IDI_ICON_70             RCDATA                  "../icons/70.ico"
-IDI_ICON_75             RCDATA                  "../icons/75.ico"
-IDI_ICON_80             RCDATA                  "../icons/80.ico"
-IDI_ICON_85             RCDATA                  "../icons/85.ico"
-IDI_ICON_90             RCDATA                  "../icons/90.ico"
-IDI_ICON_95             RCDATA                  "../icons/95.ico"
-IDI_ICON_100            RCDATA                  "../icons/100.ico"
 
 /////////////////////////////////////////////////////////////////////////////
 #endif    // not APSTUDIO_INVOKED

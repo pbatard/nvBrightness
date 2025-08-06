@@ -31,10 +31,29 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
+#include "resource.h"
 #include "tray.h"
 
+// nVidia Color data definitions
+#define NV_COLOR_RED                0
+#define NV_COLOR_GREEN              1
+#define NV_COLOR_BLUE               2
+#define NV_COLOR_MAX                3
+
+#define NV_ATTR_BRIGHTNESS          0
+#define NV_ATTR_CONTRAST            1
+#define NV_ATTR_GAMMA               2
+#define NV_ATTR_MAX                 3
+
+#define NV_COLOR_REGISTRY_INDEX		3538946
+
+// Logging
+static char log_msg[256];
+#define log(...) do { sprintf_s(log_msg, sizeof(log_msg), "nvBrightness: " __VA_ARGS__); OutputDebugStringA(log_msg); } while(0)
+
 // Globals
-static int8_t brightness = 75;
+static int32_t brightness = 50;
+static int32_t nvColorSettings[NV_ATTR_MAX][NV_COLOR_MAX] = { 0 };
 static bool enabled = true;
 static bool use_alternate_keys = false;
 static struct tray tray;
@@ -62,10 +81,111 @@ static void ExitCallback(struct tray_menu* item)
 	tray_exit();
 }
 
+// Registry procs
+static int ReadColorDataFromRegistry(void)
+{
+	int ret = -1;
+	wchar_t SubKeyName[128], ColorKeyName[32];
+	HKEY hDevices = NULL, hColorData = NULL;
+	DWORD i, j, size, type, cSubKeys = 0, cbMaxSubKey = 0, cbName = 0;
+
+	if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices", 0,
+		KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE | KEY_SET_VALUE, &hDevices) != ERROR_SUCCESS) {
+		log("Could not open NVTweak\\Devices\n");
+		goto out;
+	}
+
+	if (RegQueryInfoKey(hDevices, NULL, NULL, NULL, &cSubKeys, &cbMaxSubKey, NULL, NULL, NULL, NULL, NULL, NULL) != ERROR_SUCCESS || cSubKeys == 0) {
+		log("Could not find NVTweak\\Devices subkeys\n");
+		goto out;
+	}
+
+	for (i = 0; i < cSubKeys; i++) {
+		cbName = ARRAYSIZE(SubKeyName);
+		if (RegEnumKeyEx(hDevices, i, SubKeyName, &cbName, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+			continue;
+		wcsncat_s(SubKeyName, ARRAYSIZE(SubKeyName), L"\\Color", _TRUNCATE);
+		if (RegOpenKeyEx(hDevices, SubKeyName, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &hColorData) == ERROR_SUCCESS) {
+			for (j = 0; j < 9; j++) {
+				swprintf(ColorKeyName, ARRAYSIZE(ColorKeyName), L"%d", NV_COLOR_REGISTRY_INDEX + j);
+				size = sizeof(DWORD);
+				RegQueryValueEx(hColorData, ColorKeyName, 0, &type, (LPBYTE)&nvColorSettings[j / 3][j % 3], &size);
+			}
+			RegCloseKey(hColorData);
+		}
+	}
+
+	// Sanity/defaults check
+	for (j = 0; j < 9; j++) {
+		if (nvColorSettings[j / 3][j % 3] < 80 || nvColorSettings[j / 3][j % 3] > 120)
+			nvColorSettings[j / 3][j % 3] = 100;
+	}
+
+	// Compute our own brightness percentage
+	brightness = nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_RED] + nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_GREEN] + nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_BLUE];
+	brightness = (brightness / 3 - 80) * 5;
+	if (brightness < 0)
+		brightness = 0;
+	if (brightness > 100)
+		brightness = 100;
+	ret = 0;
+
+out:
+	if (hDevices != NULL)
+		RegCloseKey(hDevices);
+
+	return ret;
+}
+
+static int WriteColorDataToRegistry(void)
+{
+	int ret = -1;
+	wchar_t SubKeyName[128], ColorKeyName[32];
+	HKEY hDevices = NULL, hColorData = NULL;
+	DWORD i, j, size, type, val, cSubKeys = 0, cbMaxSubKey = 0, cbName = 0;
+
+	if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices", 0,
+		KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE | KEY_SET_VALUE, &hDevices) != ERROR_SUCCESS) {
+		log("Could not open NVTweak\\Devices\n");
+		goto out;
+	}
+
+	if (RegQueryInfoKey(hDevices, NULL, NULL, NULL, &cSubKeys, &cbMaxSubKey, NULL, NULL, NULL, NULL, NULL, NULL) != ERROR_SUCCESS || cSubKeys == 0) {
+		log("Could not find NVTweak\\Devices subkeys\n");
+		goto out;
+	}
+
+	for (i = 0; i < cSubKeys; i++) {
+		cbName = ARRAYSIZE(SubKeyName);
+		if (RegEnumKeyEx(hDevices, i, SubKeyName, &cbName, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+			continue;
+		wcsncat_s(SubKeyName, ARRAYSIZE(SubKeyName), L"\\Color", _TRUNCATE);
+		if (RegOpenKeyEx(hDevices, SubKeyName, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &hColorData) == ERROR_SUCCESS) {
+			// Only update the brightness values
+			for (j = 0; j < 3; j++) {
+				swprintf(ColorKeyName, ARRAYSIZE(ColorKeyName), L"%d", NV_COLOR_REGISTRY_INDEX + j);
+				size = sizeof(DWORD);
+				if (RegQueryValueEx(hColorData, ColorKeyName, 0, &type, (LPBYTE)&val, &size) != ERROR_SUCCESS) {
+					// Only update a brightness value if it already exists
+					continue;
+				}
+				if (RegSetValueEx(hColorData, ColorKeyName, 0, type, (LPBYTE)&nvColorSettings[NV_ATTR_BRIGHTNESS][j], size) != ERROR_SUCCESS)
+					log("Failed to update %S\\%S value\n", SubKeyName, ColorKeyName);
+			}
+			RegCloseKey(hColorData);
+		}
+	}
+
+out:
+	if (hDevices != NULL)
+		RegCloseKey(hDevices);
+
+	return ret;
+}
+
 // Keyboard procs
 static void ChangeBrightness(bool bIncrease)
 {
-	static wchar_t icon_path[256];
 	static wchar_t menu_txt[64];
 
 	brightness += bIncrease ? +5 : -5;
@@ -74,9 +194,13 @@ static void ChangeBrightness(bool bIncrease)
 	if (brightness > 100)
 		brightness = 100;
 
-	swprintf(icon_path, ARRAYSIZE(icon_path), L"C:\\Projects\\nvBrightness\\icons\\%02d.ico", brightness);
+	nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_RED] = 80 + (brightness / 5);
+	nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_GREEN] = 80 + (brightness / 5);
+	nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_BLUE] = 80 + (brightness / 5);
+	WriteColorDataToRegistry();
+
 	swprintf(menu_txt, ARRAYSIZE(menu_txt), L"Brightness: %d%%", brightness);
-	tray.icon = icon_path;
+	tray.icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + brightness / 5));
 	tray.menu[0].text = menu_txt;
 	tray_update(&tray);
 }
@@ -106,15 +230,25 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
 
 int WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nShowCmd)
 {
+	static wchar_t menu_txt[64];
+	int ret = 1;
+
+	if (ReadColorDataFromRegistry() < 0) {
+		log("This system doesn't appear to use an nVidia GPU - Aborting\n");
+		goto out;
+	}
+
+	swprintf(menu_txt, ARRAYSIZE(menu_txt), L"Brightness: %d%%", brightness);
+
 	HHOOK hHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandle(0), 0);
 	static struct tray_menu menu[] = {
-		{.text = L"Brightness: 75%" },
+		{.text = menu_txt },
 		{.text = L"Pause", .checked = 0, .cb = PauseCallback },
 		{.text = L"Use Internet Keys", .checked = 0, .cb = AlternateKeysCallback },
 		{.text = L"Exit", .cb = ExitCallback },
 		{.text = NULL }
 	};
-	tray.icon = L"C:\\Projects\\nvBrightness\\icons\\75.ico";
+	tray.icon =	LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + brightness / 5));
 	tray.menu = menu;
 
 	if (tray_init(&tray) < 0) {
@@ -124,6 +258,8 @@ int WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPS
 	while (tray_loop(1) == 0);
 
 	UnhookWindowsHookEx(hHook);
+	ret = 0;
 
-	return 0;
+out:
+	return ret;
 }
