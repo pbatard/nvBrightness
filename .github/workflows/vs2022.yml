@@ -1,6 +1,23 @@
 name: VS2022
 
-on: [push, pull_request]
+on:
+  push:
+    paths-ignore:
+      - '_sign.cmd'
+      - '.editorconfig'
+      - '.gitignore'
+      - '.gitattributes'
+      - 'icons/**'
+      - '**.md'
+  pull_request:
+    branches: [master]
+    paths-ignore:
+      - '_sign.cmd'
+      - '.editorconfig'
+      - '.gitignore'
+      - '.gitattributes'
+      - 'icons/**'
+      - '**.md'
 
 env:
   FRIENDLY_NAME: nvBrightness

@@ -6,6 +6,8 @@ nvBrightness: nVidia Control Panel brightness at your fingertips
 [![Github stats](https://img.shields.io/github/downloads/pbatard/nvBrightness/total.svg?style=flat-square)](https://github.com/pbatard/nvBrightness/releases)
 [![Licence](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](https://www.gnu.org/licenses/gpl-3.0.en.html)
 
+![nvBrightness screenshot](https://raw.githubusercontent.com/pbatard/nvBrightness/master/icons/nvBrightness.png)
+
 ## Motivation
 
 Because I recently got an OLED monitor that runs in HDR mode, and that I want to adjust the
@@ -73,7 +75,7 @@ grained monitor support and whatnot, you're going to have to ask elsewhere.
 I didn't spend 2 weeks reverse engineering your proprietary DLLs to be slapped with some
 kind of NDA bullshit. I did **not** sign any NDA with you, did not somehow happen to gain
 access to any of your NDA documentation, and **nobody** provided me any info or hints about
-your undocumented APIs. This is good all fashion disassembling (with Ghidra), debugging
+your undocumented APIs. This is good old-fashioned disassembling (with Ghidra), debugging
 (with x64Dbg) and lengthy trial and error...
 
 Oh, and I am a EU resident, where we have laws that prevent overreaching EULA terms, like
