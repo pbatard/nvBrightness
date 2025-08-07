@@ -36,6 +36,7 @@
 #include "resource.h"
 #include "tray.h"
 #include "nvapi.h"
+#include "registry.h"
 
 // nVidia Color data definitions
 #define NV_COLOR_RED                0
@@ -96,12 +97,20 @@ NvF32 CalculateGamma(NvS32 index, NvS32 brightness, NvS32 contrast, NvS32 gamma)
 }
 
 // Callbacks for Tray
+static void AboutCallback(struct tray_menu* item)
+{
+	(void)item;
+	MessageBoxW(NULL, L"nvBrightness v1.0\n\nCopyright © 2025 Pete Batard <pete@akeo.ie>\n"
+		"https://github.com/pbatard/nvBrightness", L"About", MB_OK);
+}
+
 static void AlternateKeysCallback(struct tray_menu* item)
 {
 	use_alternate_keys = !use_alternate_keys;
 	OutputDebugStringA("Alternate Keys: ");
 	OutputDebugStringA(use_alternate_keys ? "Enabled\n" : "Disabled\n");
 	item->checked = !item->checked;
+	WriteRegistryKey32(REGKEY_HKCU, "UseAlternateKeys", item->checked);
 	tray_update(&tray);
 }
 
@@ -363,9 +372,7 @@ static void ChangeBrightness(bool bIncrease)
 	NvUpdateGamma();
 	WriteNvColorDataToRegistry();
 
-	swprintf(menu_txt, ARRAYSIZE(menu_txt), L"Brightness: %d%%", brightness);
 	tray.icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + brightness / 5));
-	tray.menu[0].text = menu_txt;
 	tray_update(&tray);
 }
 
@@ -375,7 +382,7 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
 		KBDLLHOOKSTRUCT* kbhs = (KBDLLHOOKSTRUCT*)lParam;
 
 		if (!use_alternate_keys) {
-			// TODO: Check if Alt/Ctr/Shift are pressed and ignore then?
+			// TODO: Check if Alt/Ctrl/Shift are pressed and ignore then?
 			if ((kbhs->vkCode == VK_SCROLL || kbhs->vkCode == VK_PAUSE) && (kbhs->flags == 0x0)) {
 				ChangeBrightness((kbhs->vkCode == VK_PAUSE));
 				return 1;
@@ -410,16 +417,16 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		goto out;
 	}
 
-	swprintf(menu_txt, ARRAYSIZE(menu_txt), L"Brightness: %d%%", brightness);
-
 	HHOOK hHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandle(0), 0);
 	static struct tray_menu menu[] = {
-		{.text = menu_txt },
+		{.text = L"About", .cb = AboutCallback },
 		{.text = L"Pause", .checked = 0, .cb = PauseCallback },
 		{.text = L"Use Internet navigation keys", .checked = 0, .cb = AlternateKeysCallback },
 		{.text = L"Exit", .cb = ExitCallback },
 		{.text = NULL }
 	};
+	use_alternate_keys = (ReadRegistryKey32(REGKEY_HKCU, "UseAlternateKeys") != 0);
+	menu[2].checked = use_alternate_keys;
 	tray.icon =	LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + brightness / 5));
 	tray.menu = menu;
 

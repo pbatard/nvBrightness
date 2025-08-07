@@ -26,6 +26,9 @@
     <ClInclude Include="..\src\nvapi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\registry.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="..\src\nvBrightness.manifest">

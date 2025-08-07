@@ -224,6 +224,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\nvapi.h" />
+    <ClInclude Include="..\src\registry.h" />
     <ClInclude Include="..\src\tray.h" />
   </ItemGroup>
   <ItemGroup>
