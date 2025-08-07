@@ -26,13 +26,16 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
-#include <stdbool.h>
+#include <math.h>
 
 #include "resource.h"
 #include "tray.h"
+#include "nvapi.h"
 
 // nVidia Color data definitions
 #define NV_COLOR_RED                0
@@ -47,16 +50,50 @@
 
 #define NV_COLOR_REGISTRY_INDEX		3538946
 
-// Logging
-static char log_msg[256];
-#define log(...) do { sprintf_s(log_msg, sizeof(log_msg), "nvBrightness: " __VA_ARGS__); OutputDebugStringA(log_msg); } while(0)
-
 // Globals
 static int32_t brightness = 50;
 static int32_t nvColorSettings[NV_ATTR_MAX][NV_COLOR_MAX] = { 0 };
 static bool enabled = true;
 static bool use_alternate_keys = false;
 static struct tray tray;
+
+// Logging
+static void logger(char* format, ...)
+{
+	char log_msg[256];
+
+	va_list argp;
+	va_start(argp, format);
+	vsprintf_s(log_msg, sizeof(log_msg), format, argp);
+	va_end(argp);
+	OutputDebugStringA(log_msg);
+}
+
+// Calculate the Gamma offset at a specific index.
+NvF32 CalculateGamma(NvS32 index, NvS32 brightness, NvS32 contrast, NvS32 gamma)
+{
+	NvF32 fBrightness, fContrast, fGamma;
+
+	fContrast = (NvF32)(contrast - 100) / 100.0f;
+	if (fContrast <= 0.0f)
+		fContrast = (fContrast + 1.0f) * ((NvF32)index / 1023.0f - 0.5f);
+	else
+		fContrast = ((NvF32)index / 1023.0f - 0.5f) / (1.0f - fContrast);
+
+	fBrightness = (NvF32)(brightness - 100) / 100.0f + fContrast + 0.5f;
+	if (fBrightness < 0.0f)
+		fBrightness = 0.0f;
+	if (fBrightness > 1.0f)
+		fBrightness = 1.0f;
+
+	fGamma = (NvF32)pow((double)fBrightness, 1.0 / ((double)gamma / 100.0));
+	if (fGamma < 0.0f)
+		fGamma = 0.0f;
+	if (fGamma > 1.0f)
+		fGamma = 1.0f;
+
+	return fGamma;
+}
 
 // Callbacks for Tray
 static void AlternateKeysCallback(struct tray_menu* item)
@@ -82,21 +119,21 @@ static void ExitCallback(struct tray_menu* item)
 }
 
 // Registry procs
-static int ReadColorDataFromRegistry(void)
+static int ReadNvColorDataFromRegistry(void)
 {
 	int ret = -1;
 	wchar_t SubKeyName[128], ColorKeyName[32];
 	HKEY hDevices = NULL, hColorData = NULL;
-	DWORD i, j, size, type, cSubKeys = 0, cbMaxSubKey = 0, cbName = 0;
+	DWORD i, j, size, type, cSubKeys = 0, cbName;
 
 	if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices", 0,
 		KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE | KEY_SET_VALUE, &hDevices) != ERROR_SUCCESS) {
-		log("Could not open NVTweak\\Devices\n");
+		logger("Could not open NVTweak\\Devices\n");
 		goto out;
 	}
 
-	if (RegQueryInfoKey(hDevices, NULL, NULL, NULL, &cSubKeys, &cbMaxSubKey, NULL, NULL, NULL, NULL, NULL, NULL) != ERROR_SUCCESS || cSubKeys == 0) {
-		log("Could not find NVTweak\\Devices subkeys\n");
+	if (RegQueryInfoKey(hDevices, NULL, NULL, NULL, &cSubKeys, NULL, NULL, NULL, NULL, NULL, NULL, NULL) != ERROR_SUCCESS || cSubKeys == 0) {
+		logger("Could not find NVTweak\\Devices subkeys\n");
 		goto out;
 	}
 
@@ -137,21 +174,21 @@ out:
 	return ret;
 }
 
-static int WriteColorDataToRegistry(void)
+static int WriteNvColorDataToRegistry(void)
 {
 	int ret = -1;
 	wchar_t SubKeyName[128], ColorKeyName[32];
 	HKEY hDevices = NULL, hColorData = NULL;
-	DWORD i, j, size, type, val, cSubKeys = 0, cbMaxSubKey = 0, cbName = 0;
+	DWORD i, j, size, type, val, cSubKeys = 0, cbName;
 
 	if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices", 0,
 		KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE | KEY_SET_VALUE, &hDevices) != ERROR_SUCCESS) {
-		log("Could not open NVTweak\\Devices\n");
+		logger("Could not open NVTweak\\Devices\n");
 		goto out;
 	}
 
-	if (RegQueryInfoKey(hDevices, NULL, NULL, NULL, &cSubKeys, &cbMaxSubKey, NULL, NULL, NULL, NULL, NULL, NULL) != ERROR_SUCCESS || cSubKeys == 0) {
-		log("Could not find NVTweak\\Devices subkeys\n");
+	if (RegQueryInfoKey(hDevices, NULL, NULL, NULL, &cSubKeys, NULL, NULL, NULL, NULL, NULL, NULL, NULL) != ERROR_SUCCESS || cSubKeys == 0) {
+		logger("Could not find NVTweak\\Devices subkeys\n");
 		goto out;
 	}
 
@@ -170,7 +207,7 @@ static int WriteColorDataToRegistry(void)
 					continue;
 				}
 				if (RegSetValueEx(hColorData, ColorKeyName, 0, type, (LPBYTE)&nvColorSettings[NV_ATTR_BRIGHTNESS][j], size) != ERROR_SUCCESS)
-					log("Failed to update %S\\%S value\n", SubKeyName, ColorKeyName);
+					logger("Failed to update %S\\%S value\n", SubKeyName, ColorKeyName);
 			}
 			RegCloseKey(hColorData);
 		}
@@ -179,6 +216,132 @@ static int WriteColorDataToRegistry(void)
 out:
 	if (hDevices != NULL)
 		RegCloseKey(hDevices);
+
+	return ret;
+}
+
+// nVidia API Procs
+static int NvInit(void)
+{
+	NvAPI_Status r;
+	NvAPI_ShortString errStr = { 0 };
+
+	if (NvAPI_Init(logger) != 0) {
+		logger("Failed to init NvAPI\n");
+		return -1;
+	}
+	if (NvAPI_Initialize == NULL)
+		return -1;
+	r = NvAPI_Initialize();
+	if (r != NVAPI_OK) {
+		NvAPI_GetErrorMessage(r, errStr);
+		logger("NvAPI_Initialize: %d %s\n", r, errStr);
+		if (NvAPI_Exit != NULL)
+			NvAPI_Exit();
+		return -1;
+	}
+
+	return 0;
+}
+
+static __inline void NvExit(void)
+{
+	NvAPI_Exit();
+}
+
+static int NvGetGpuCount(void)
+{
+	NvAPI_Status r;
+	NvAPI_ShortString errStr = { 0 };
+	NvPhysicalGpuHandle gpuHandles[NVAPI_MAX_PHYSICAL_GPUS] = { 0 };
+	NvU32 gpuCount = 0;
+
+	if (NvAPI_EnumPhysicalGPUs == NULL)
+		return -1;
+	r = NvAPI_EnumPhysicalGPUs(gpuHandles, &gpuCount);
+	if (r != NVAPI_OK) {
+		NvAPI_GetErrorMessage(r, errStr);
+		logger("NvAPI_EnumPhysicalGPUs: %d %s\n", r, errStr);
+		return -1;
+	}
+
+	return (int)gpuCount;
+}
+
+void NvCreateGammaCorrection(NV_GAMMA_CORRECTION_EX* gammaCorrection)
+{
+	gammaCorrection->version = NVGAMMA_CORRECTION_EX_VER;
+	gammaCorrection->unknown = 1;
+
+	for (NvS32 Index = 0; Index < NV_GAMMARAMPEX_NUM_VALUES; Index++) {
+		for (int Color = 0; Color < NV_COLOR_MAX; Color++) {
+			gammaCorrection->gammaRampEx[NV_COLOR_MAX * Index + Color] = CalculateGamma(
+				Index,
+				nvColorSettings[NV_ATTR_BRIGHTNESS][Color],
+				nvColorSettings[NV_ATTR_CONTRAST][Color],
+				nvColorSettings[NV_ATTR_GAMMA][Color]
+			);
+		}
+	}
+}
+
+int NvUpdateGamma(void)
+{
+	static NV_GAMMA_CORRECTION_EX gammaCorrection;
+	int ret = -1;
+	NvAPI_Status r;
+	NvAPI_ShortString errStr = { 0 };
+	NvPhysicalGpuHandle gpuHandles[NVAPI_MAX_PHYSICAL_GPUS] = { 0 };
+	NvU32 gpuCount = 0;
+
+	NvCreateGammaCorrection(&gammaCorrection);
+
+	r = NvAPI_EnumPhysicalGPUs(gpuHandles, &gpuCount);
+	if (r != NVAPI_OK) {
+		NvAPI_GetErrorMessage(r, errStr);
+		logger("NvAPI_EnumPhysicalGPUs: %d %s\n", r, errStr);
+		return -1;
+	}
+
+	for (NvU32 i = 0; i < gpuCount; i++) {
+		NvU32 displayCount = 0;
+		NvU32 busId = 0;
+		NvU32 busSlotId = 0;
+
+		r = NvAPI_GPU_GetConnectedDisplayIds(gpuHandles[i], NULL, &displayCount, 0);
+		if (r != NVAPI_OK) {
+			NvAPI_GetErrorMessage(r, errStr);
+			logger("NvAPI_GPU_GetConnectedDisplayIds: %d %s\n", r, errStr);
+			return -1;
+		}
+
+		if (displayCount == 0)
+			return -1;
+
+		NV_GPU_DISPLAYIDS* dispIds = calloc(displayCount, sizeof(NV_GPU_DISPLAYIDS));
+		if (dispIds == NULL) {
+			logger("Could not allocate NV_GPU_DISPLAYIDS array\n");
+			return -1;
+		}
+		dispIds[0].version = NV_GPU_DISPLAYIDS_VER;
+
+		r = NvAPI_GPU_GetConnectedDisplayIds(gpuHandles[i], dispIds, &displayCount, 0);
+		if (r == NVAPI_OK) {
+			for (NvU32 j = 0; j < displayCount; j++) {
+				r = NvAPI_DISP_SetTargetGammaCorrection(dispIds[j].displayId, &gammaCorrection);
+				if (r != NVAPI_OK) {
+					NvAPI_GetErrorMessage(r, errStr);
+					logger("NvAPI_DISP_SetTargetGammaCorrection failed for displayId[%d] (0x%08x): %d %s\n", j, dispIds[j].displayId, r, errStr);
+				} else {
+#ifdef _DEBUG
+					logger("Updated gamma for displayId[%d] = 0x%08x to %d%% brightness\n", j, dispIds[j].displayId, brightness);
+#endif
+					ret = 0;
+				}
+			}
+		}
+		free(dispIds);
+	}
 
 	return ret;
 }
@@ -197,7 +360,8 @@ static void ChangeBrightness(bool bIncrease)
 	nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_RED] = 80 + (brightness / 5);
 	nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_GREEN] = 80 + (brightness / 5);
 	nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_BLUE] = 80 + (brightness / 5);
-	WriteColorDataToRegistry();
+	NvUpdateGamma();
+	WriteNvColorDataToRegistry();
 
 	swprintf(menu_txt, ARRAYSIZE(menu_txt), L"Brightness: %d%%", brightness);
 	tray.icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + brightness / 5));
@@ -228,13 +392,21 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
 	return CallNextHookEx(NULL, nCode, wParam, lParam);
 }
 
-int WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nShowCmd)
+int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nShowCmd)
 {
 	static wchar_t menu_txt[64];
 	int ret = 1;
 
-	if (ReadColorDataFromRegistry() < 0) {
-		log("This system doesn't appear to use an nVidia GPU - Aborting\n");
+	if (NvInit() < 0 || NvGetGpuCount() < 1) {
+		MessageBoxA(NULL, "An nVidiaGPU could not be detected on this system.\n"
+			"This application will now exit.", "No nVidia GPU", MB_OK);
+		goto out;
+	}
+
+	if (ReadNvColorDataFromRegistry() < 0) {
+		MessageBoxA(NULL, "Could not read existing nVidia color settings from the registry.\n\n"
+			"You may have to adjust desktop color settings at least once, using the nVidia control panel.",
+			"No nVidia color settings", MB_OK);
 		goto out;
 	}
 
@@ -244,7 +416,7 @@ int WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPS
 	static struct tray_menu menu[] = {
 		{.text = menu_txt },
 		{.text = L"Pause", .checked = 0, .cb = PauseCallback },
-		{.text = L"Use Internet Keys", .checked = 0, .cb = AlternateKeysCallback },
+		{.text = L"Use Internet navigation keys", .checked = 0, .cb = AlternateKeysCallback },
 		{.text = L"Exit", .cb = ExitCallback },
 		{.text = NULL }
 	};
@@ -261,5 +433,6 @@ int WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPS
 	ret = 0;
 
 out:
+	NvExit();
 	return ret;
 }

@@ -223,6 +223,7 @@
     <ClCompile Include="..\src\nvBrightness.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\src\nvapi.h" />
     <ClInclude Include="..\src\tray.h" />
   </ItemGroup>
   <ItemGroup>
