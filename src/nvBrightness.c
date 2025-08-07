@@ -1,4 +1,4 @@
-/*
+﻿/*
  * nvBrightness - nVidia Control Panel brightness at your fingertips
  *
  * Copyright © 2025 Pete Batard <pete@akeo.ie>
