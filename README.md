@@ -92,7 +92,7 @@ So, nVidia, if you are unhappy about this project, it's merely a reflection of t
 you should have done a better job.
 
 Oh and while I'm at it, and since it looks like you now have a whole business revolving
-around _Predictive Interpolation_ (which is really what "IA" is, as there certainly is no
+around _Predictive Interpolation_ (which is really what "AI" is, as there certainly is no
 "intelligence" in what's going on under the hood) and it's time you (and others) realise
 that you are on the wrong side of history when it comes to releasing closed source software,
 let me give you a very interesting property of _Predictive Interpolation_ when it gets
