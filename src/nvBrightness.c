@@ -1,4 +1,4 @@
-﻿/*
+/*
  * nvBrightness - nVidia Control Panel brightness at your fingertips
  *
  * Copyright © 2025 Pete Batard <pete@akeo.ie>
@@ -32,11 +32,15 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <commctrl.h>
 
 #include "resource.h"
 #include "tray.h"
 #include "nvapi.h"
 #include "registry.h"
+
+#pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "version.lib")
 
 // nVidia Color data definitions
 #define NV_COLOR_RED                0
@@ -51,12 +55,22 @@
 
 #define NV_COLOR_REGISTRY_INDEX		3538946
 
+enum {
+	LegalCopyright = 0,
+	ProductName,
+	Comments,
+};
+
 // Globals
 static int32_t brightness = 50;
 static int32_t nvColorSettings[NV_ATTR_MAX][NV_COLOR_MAX] = { 0 };
 static bool enabled = true;
 static bool use_alternate_keys = false;
 static struct tray tray;
+static void* version_data = NULL;
+static VS_FIXEDFILEINFO* file_info = NULL;
+static wchar_t* info_str[3] = { 0 };
+static uint16_t* gVersion = NULL;
 
 // Logging
 static void logger(char* format, ...)
@@ -96,12 +110,57 @@ NvF32 CalculateGamma(NvS32 index, NvS32 brightness, NvS32 contrast, NvS32 gamma)
 	return fGamma;
 }
 
+// Open hyperlink from TaskDialog
+HRESULT CALLBACK TaskDialogCallback(HWND hwnd, UINT uNotification, WPARAM wParam, LPARAM lParam, LONG_PTR dwRefData)
+{
+	if (uNotification == TDN_HYPERLINK_CLICKED) {
+		ShellExecute(hwnd, TEXT("open"), (TCHAR*)lParam, NULL, NULL, SW_SHOW);
+	}
+	return 0;
+}
+
 // Callbacks for Tray
 static void AboutCallback(struct tray_menu* item)
 {
+	wchar_t szTitle[64] = L"";
+	wchar_t szHeader[128] = L"";
+	wchar_t szFooter[128] = L"";
+	wchar_t szProject[128] = L"";
+	wchar_t szReleaseUrl[64] = L"";
+
 	(void)item;
-	MessageBoxW(NULL, L"nvBrightness v1.0\n\nCopyright © 2025 Pete Batard <pete@akeo.ie>\n"
-		"https://github.com/pbatard/nvBrightness", L"About", MB_OK);
+
+	swprintf_s(szTitle, ARRAYSIZE(szTitle), L"About %s", info_str[ProductName]);
+	swprintf_s(szHeader, ARRAYSIZE(szHeader), L"%s v%d.%d", info_str[ProductName], file_info->dwProductVersionMS >> 16, file_info->dwProductVersionMS & 0xffff);
+	wchar_t* szContent = L"Increase/decrease display brightness using nVidia controls.\nKeyboard shortcuts: Scroll Lock / Pause|Break";
+	swprintf_s(szFooter, ARRAYSIZE(szFooter), L"Licensed under <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\">GPLv3</a>, %s", info_str[LegalCopyright]);
+	swprintf_s(szProject, ARRAYSIZE(szProject), L"Project page\n%s", info_str[Comments]);
+	swprintf_s(szReleaseUrl, ARRAYSIZE(szReleaseUrl), L"%s/releases/latest", info_str[Comments]);
+	TASKDIALOG_BUTTON aCustomButtons[] = {
+		{ 1001, szProject },
+		{ 1002, L"Latest release" },
+	};
+	TASKDIALOGCONFIG tdc = { 0 };
+	tdc.cbSize = sizeof(tdc);
+	tdc.dwFlags = TDF_USE_HICON_MAIN | TDF_USE_COMMAND_LINKS | TDF_ENABLE_HYPERLINKS | TDF_EXPANDED_BY_DEFAULT | TDF_EXPAND_FOOTER_AREA | TDF_ALLOW_DIALOG_CANCELLATION;
+	tdc.pButtons = aCustomButtons;
+	tdc.cButtons = sizeof(aCustomButtons) / sizeof(aCustomButtons[0]);
+	tdc.pszWindowTitle = szTitle;
+	tdc.nDefaultButton = IDOK;
+	tdc.hMainIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON));
+	tdc.pszMainInstruction = szHeader;
+	tdc.pszContent = szContent;
+	tdc.pszFooter = szFooter;
+	tdc.pszFooterIcon = TD_INFORMATION_ICON;
+	tdc.dwCommonButtons = TDCBF_OK_BUTTON;
+	tdc.pfCallback = TaskDialogCallback;
+	int nClickedBtn;
+	if (SUCCEEDED(TaskDialogIndirect(&tdc, &nClickedBtn, NULL, NULL))) {
+		if (nClickedBtn == 1001)
+			ShellExecute(NULL, L"Open", info_str[Comments], NULL, NULL, SW_SHOW);
+		if (nClickedBtn == 1002)
+			ShellExecute(NULL, L"Open", szReleaseUrl, NULL, NULL, SW_SHOW);
+	}
 }
 
 static void AlternateKeysCallback(struct tray_menu* item)
@@ -314,8 +373,6 @@ int NvUpdateGamma(void)
 
 	for (NvU32 i = 0; i < gpuCount; i++) {
 		NvU32 displayCount = 0;
-		NvU32 busId = 0;
-		NvU32 busSlotId = 0;
 
 		r = NvAPI_GPU_GetConnectedDisplayIds(gpuHandles[i], NULL, &displayCount, 0);
 		if (r != NVAPI_OK) {
@@ -327,29 +384,29 @@ int NvUpdateGamma(void)
 		if (displayCount == 0)
 			return -1;
 
-		NV_GPU_DISPLAYIDS* dispIds = calloc(displayCount, sizeof(NV_GPU_DISPLAYIDS));
-		if (dispIds == NULL) {
+		NV_GPU_DISPLAYIDS* displayIds = calloc(displayCount, sizeof(NV_GPU_DISPLAYIDS));
+		if (displayIds == NULL) {
 			logger("Could not allocate NV_GPU_DISPLAYIDS array\n");
 			return -1;
 		}
-		dispIds[0].version = NV_GPU_DISPLAYIDS_VER;
+		displayIds[0].version = NV_GPU_DISPLAYIDS_VER;
 
-		r = NvAPI_GPU_GetConnectedDisplayIds(gpuHandles[i], dispIds, &displayCount, 0);
+		r = NvAPI_GPU_GetConnectedDisplayIds(gpuHandles[i], displayIds, &displayCount, 0);
 		if (r == NVAPI_OK) {
 			for (NvU32 j = 0; j < displayCount; j++) {
-				r = NvAPI_DISP_SetTargetGammaCorrection(dispIds[j].displayId, &gammaCorrection);
+				r = NvAPI_DISP_SetTargetGammaCorrection(displayIds[j].displayId, &gammaCorrection);
 				if (r != NVAPI_OK) {
 					NvAPI_GetErrorMessage(r, errStr);
-					logger("NvAPI_DISP_SetTargetGammaCorrection failed for displayId[%d] (0x%08x): %d %s\n", j, dispIds[j].displayId, r, errStr);
+					logger("NvAPI_DISP_SetTargetGammaCorrection failed for displayId[%d] (0x%08x): %d %s\n", j, displayIds[j].displayId, r, errStr);
 				} else {
 #ifdef _DEBUG
-					logger("Updated gamma for displayId[%d] = 0x%08x to %d%% brightness\n", j, dispIds[j].displayId, brightness);
+					logger("Updated gamma for displayId[%d] = 0x%08x to %d%% brightness\n", j, displayIds[j].displayId, brightness);
 #endif
 					ret = 0;
 				}
 			}
 		}
-		free(dispIds);
+		free(displayIds);
 	}
 
 	return ret;
@@ -399,10 +456,57 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
 	return CallNextHookEx(NULL, nCode, wParam, lParam);
 }
 
+// I've said it before and I'll say it again:
+// Retrieving versioning and file information on Windows is a COMPLETE SHIT SHOW!!!
+#define GET_VERSION_INFO(x) do { swprintf_s(SubBlock, ARRAYSIZE(SubBlock), \
+	L"\\StringFileInfo\\%04x%04x\\" #x, lpTranslate[0].wLanguage, lpTranslate[0].wCodePage); \
+	VerQueryValue(version_data, SubBlock, &info_str[x], &size); } while(0)
+
+bool PopulateVersionData(void)
+{
+	struct LANGANDCODEPAGE {
+		WORD wLanguage;
+		WORD wCodePage;
+	} *lpTranslate;
+	wchar_t exe_path[MAX_PATH], SubBlock[256];
+	DWORD size, dummy;
+	BOOL br;
+
+	GetModuleFileName(NULL, exe_path, ARRAYSIZE(exe_path));
+	size = GetFileVersionInfoSize(exe_path, &dummy);
+	if (size == 0)
+		return false;
+	version_data = malloc(size);	// freed on app exit
+	if (version_data == NULL)
+		return false;
+
+	if (!GetFileVersionInfo(exe_path, 0, size, version_data))
+		return false;
+
+	br = VerQueryValue(version_data, L"\\", (void**)&file_info, &size);
+	if (!br || file_info == NULL || size != sizeof(VS_FIXEDFILEINFO))
+		return false;
+
+	if (!VerQueryValue(version_data, L"\\VarFileInfo\\Translation", (LPVOID*)&lpTranslate, &size) ||
+		size < sizeof(struct LANGANDCODEPAGE))
+		return false;
+
+	GET_VERSION_INFO(LegalCopyright);
+	GET_VERSION_INFO(ProductName);
+	GET_VERSION_INFO(Comments);
+
+	return (info_str[0] != NULL && info_str[1] != NULL && info_str[2] != NULL);
+}
+
 int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nShowCmd)
 {
 	static wchar_t menu_txt[64];
 	int ret = 1;
+
+	if (!PopulateVersionData()) {
+		MessageBoxA(NULL, "Do NOT strip executable version information!", "That'll teach ya", MB_OK);
+		goto out;
+	}
 
 	if (NvInit() < 0 || NvGetGpuCount() < 1) {
 		MessageBoxA(NULL, "An nVidiaGPU could not be detected on this system.\n"
@@ -441,5 +545,9 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 
 out:
 	NvExit();
+	free(version_data);
+#ifdef _DEBUG
+	_CrtDumpMemoryLeaks();
+#endif
 	return ret;
 }

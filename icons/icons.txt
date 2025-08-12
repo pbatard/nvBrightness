@@ -4,3 +4,5 @@
 3. Use ImageMagick to convert exported PNG to ICO:
    mogrify -format ico -background transparent -define 'icon:auto-resize=64' *.png
    convert -background transparent -define 'icon:auto-resize=64' 75.png 75.ico
+
+Or just use Axialis IconWorkshop's File Browser to select all .svg's and batch create the icons.

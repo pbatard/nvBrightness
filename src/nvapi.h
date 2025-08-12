@@ -92,11 +92,11 @@ typedef struct {
 
 #define NVAPI_API_CALL __stdcall
 
-typedef int *(NVAPI_API_CALL *NVAPI_QUERYINTERFACE) (uint);
+typedef int *(NVAPI_API_CALL *NVAPI_QUERYINTERFACE) (NvU32);
 typedef int (NVAPI_API_CALL *NVAPI_INITIALIZE) (void);
 typedef int (NVAPI_API_CALL *NVAPI_UNLOAD) (void);
 typedef int (NVAPI_API_CALL *NVAPI_GETERRORMESSAGE) (NvAPI_Status, NvAPI_ShortString);
-typedef int (NVAPI_API_CALL *NVAPI_ENUMPHYSICALGPUS) (NvPhysicalGpuHandle nvGPUHandle[NVAPI_MAX_PHYSICAL_GPUS], NvU32*);
+typedef int (NVAPI_API_CALL *NVAPI_ENUMPHYSICALGPUS) (NvPhysicalGpuHandle*, NvU32*);
 typedef int (NVAPI_API_CALL *NVAPI_GPU_GETCONNECTEDDISPLAYIDS) (NvPhysicalGpuHandle, NV_GPU_DISPLAYIDS*, NvU32*, NvU32);
 typedef int (NVAPI_API_CALL *NVAPI_DISP_SETTARGETGAMMACORRECTION) (NvU32, NV_GAMMA_CORRECTION_EX*);
 typedef void (*NvAPI_Logger)(char*, ...);

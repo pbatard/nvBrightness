@@ -89,8 +89,8 @@ IDI_ICON_100            ICON                    "../icons/100.ico"
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,0,0
- PRODUCTVERSION 1,0,0,0
+ FILEVERSION 1,1,0,0
+ PRODUCTVERSION 1,1,0,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -107,12 +107,13 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Akeo Consulting"
             VALUE "FileDescription", "nvBrightness"
-            VALUE "FileVersion", "1.0.0.0"
+            VALUE "FileVersion", "1.1.0.0"
             VALUE "InternalName", "nvbrightness.exe"
-            VALUE "LegalCopyright", "© 2025 Pete Batard <pete@akeo.ie>"
+            VALUE "LegalCopyright", "Copyright © 2025 Pete Batard"
             VALUE "OriginalFilename", "nvbrightness.exe"
             VALUE "ProductName", "nvBrightness"
-            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "ProductVersion", "1.1.0.0"
+            VALUE "Comments", "https://github.com/pbatard/nvBrightness"
         END
     END
     BLOCK "VarFileInfo"
