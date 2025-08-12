@@ -66,8 +66,8 @@ Nope.
 ### But I didn't even finish my question!!
 
 And I already told you above that I am not planning to expand this software for your specific
-wishes. So if you want contrast control, alternate key mappings, dark mode menus, more fine
-grained monitor support and whatnot, you're going to have to ask elsewhere.
+wishes. So if you want contrast control, alternate key mappings, more fine grained monitor
+support and whatnot, you're going to have to ask elsewhere.
 
 
 ## Note to nVidia

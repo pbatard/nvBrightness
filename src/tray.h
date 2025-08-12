@@ -26,7 +26,22 @@
 #pragma once
 
 #include <windows.h>
+#include <dwmapi.h>
 #include <shellapi.h>
+
+#pragma comment(lib, "dwmapi.lib")
+
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
+typedef enum {
+	AppMode_Default,
+	AppMode_AllowDark,
+	AppMode_ForceDark,
+	AppMode_ForceLight,
+	AppMode_Max
+} PreferredAppMode;
 
 struct tray_menu;
 
@@ -36,9 +51,9 @@ struct tray {
 };
 
 struct tray_menu {
-	wchar_t* text;
-	int disabled;
-	int checked;
+	const wchar_t* text;
+	bool disabled;
+	bool checked;
 
 	void (*cb)(struct tray_menu*);
 	void* context;
@@ -49,13 +64,13 @@ struct tray_menu {
 static void tray_update(struct tray* tray);
 
 #define WM_TRAY_CALLBACK_MESSAGE (WM_USER + 1)
-#define WC_TRAY_CLASS_NAME L"nvBrightness"
 #define ID_TRAY_FIRST 1000
 
 static WNDCLASSEX wc;
 static NOTIFYICONDATA nid;
 static HWND hwnd;
 static HMENU hmenu = NULL;
+static const wchar_t* class_name = NULL;
 
 static LRESULT CALLBACK _tray_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	switch (msg) {
@@ -118,7 +133,7 @@ static HMENU _tray_menu(struct tray_menu* m, UINT* id) {
 				item.fState |= MFS_CHECKED;
 			}
 			item.wID = *id;
-			item.dwTypeData = m->text;
+			item.dwTypeData = (LPWSTR)m->text;
 			item.dwItemData = (ULONG_PTR)m;
 
 			InsertMenuItem(hmenu, *id, TRUE, &item);
@@ -127,27 +142,53 @@ static HMENU _tray_menu(struct tray_menu* m, UINT* id) {
 	return hmenu;
 }
 
-static int tray_init(struct tray* tray) {
+static void tray_enable_dark_mode() {
+	HMODULE hUx = LoadLibraryA("uxtheme.dll");
+	if (!hUx)
+		return;
+
+	typedef PreferredAppMode(WINAPI* SetPreferredAppMode_t)(PreferredAppMode);
+	SetPreferredAppMode_t SetPreferredAppMode =
+		(SetPreferredAppMode_t)GetProcAddress(hUx, MAKEINTRESOURCEA(135));
+	if (SetPreferredAppMode)
+		SetPreferredAppMode(AppMode_AllowDark);
+
+#if 0
+	BOOL dark_mode = FALSE;
+	DWORD data = 0, size = sizeof(data);
+	if (RegGetValueA(HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+		"AppsUseLightTheme", RRF_RT_REG_DWORD, NULL, &data, &size) == ERROR_SUCCESS)
+		dark_mode = (data == 0);
+	DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark_mode, sizeof(dark_mode));
+#endif
+}
+
+// Using a GUID ensures that Windows recognizes the app even if it changes version or has its .exe moved
+static int tray_init(struct tray* tray, const wchar_t* name, const GUID guid) {
+	if (!tray || !name) return -1;
+
+	class_name = name;
 	memset(&wc, 0, sizeof(wc));
 	wc.cbSize = sizeof(WNDCLASSEX);
 	wc.lpfnWndProc = _tray_wnd_proc;
 	wc.hInstance = GetModuleHandle(NULL);
-	wc.lpszClassName = WC_TRAY_CLASS_NAME;
+	wc.lpszClassName = name;
 	if (!RegisterClassEx(&wc)) {
 		return -1;
 	}
 
-	hwnd = CreateWindowEx(0, WC_TRAY_CLASS_NAME, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+	hwnd = CreateWindowEx(0, class_name, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 	if (hwnd == NULL) {
 		return -1;
 	}
+	tray_enable_dark_mode();
 	UpdateWindow(hwnd);
 
 	memset(&nid, 0, sizeof(nid));
 	nid.cbSize = sizeof(NOTIFYICONDATA);
 	nid.hWnd = hwnd;
-	nid.uID = 0;
-	nid.uFlags = NIF_ICON | NIF_MESSAGE;
+	nid.guidItem = guid;
+	nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_GUID;
 	nid.uCallbackMessage = WM_TRAY_CALLBACK_MESSAGE;
 	Shell_NotifyIcon(NIM_ADD, &nid);
 
@@ -195,5 +236,9 @@ static void tray_exit() {
 		DestroyMenu(hmenu);
 	}
 	PostQuitMessage(0);
-	UnregisterClass(WC_TRAY_CLASS_NAME, GetModuleHandle(NULL));
+	UnregisterClass(class_name, GetModuleHandle(NULL));
 }
+
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */

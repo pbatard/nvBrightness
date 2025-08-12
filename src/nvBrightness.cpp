@@ -33,14 +33,21 @@
 #include <stdlib.h>
 #include <math.h>
 #include <commctrl.h>
+#include <shellscalingapi.h>
 
 #include "resource.h"
 #include "tray.h"
 #include "nvapi.h"
 #include "registry.h"
+#include "DarkTaskDialog.hpp"
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "version.lib")
+#pragma comment(lib, "shcore.lib")
+
+// Using a GUID for the tray icon allows the executable to be moved around or change version
+// without requiring the user to go through the taskbar settings to re-enable the icon.
+#define TRAY_ICON_GUID { 0x64397973, 0xa694, 0x4640, { 0x80, 0x26, 0x96, 0x04, 0x46, 0x75, 0x00, 0x2b } }
 
 // nVidia Color data definitions
 #define NV_COLOR_RED                0
@@ -55,6 +62,7 @@
 
 #define NV_COLOR_REGISTRY_INDEX		3538946
 
+// Enums for the info_str[] array
 enum {
 	LegalCopyright = 0,
 	ProductName,
@@ -73,7 +81,7 @@ static wchar_t* info_str[3] = { 0 };
 static uint16_t* gVersion = NULL;
 
 // Logging
-static void logger(char* format, ...)
+static void logger(const char* format, ...)
 {
 	char log_msg[256];
 
@@ -110,6 +118,42 @@ NvF32 CalculateGamma(NvS32 index, NvS32 brightness, NvS32 contrast, NvS32 gamma)
 	return fGamma;
 }
 
+// Check if Dark Mode is active
+bool IsDarkModeEnabled(void)
+{
+	DWORD data = 0, size = sizeof(data);
+	if (RegGetValueA(HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+		"AppsUseLightTheme", RRF_RT_REG_DWORD, NULL, &data, &size) == ERROR_SUCCESS)
+		return (data == 0);
+	return false;
+}
+
+// Task dialogs and message boxes that do respect the user Dark Mode settings
+static __inline HRESULT ProperTaskDialogIndirect(const TASKDIALOGCONFIG* pTaskConfig, int* pnButton,
+	int* pnRadioButton, BOOL* pfVerificationFlagChecked)
+{
+	SFTRS::DarkTaskDialog::setTheme(IsDarkModeEnabled() ? SFTRS::DarkTaskDialog::dark : SFTRS::DarkTaskDialog::light);
+	return TaskDialogIndirect(pTaskConfig, pnButton, pnRadioButton, pfVerificationFlagChecked);
+}
+
+static __inline void ProperMessageBox(wchar_t* icon, const wchar_t* title, const wchar_t* format, ...)
+{
+	wchar_t msg[512];
+
+	va_list argp;
+	va_start(argp, format);
+	vswprintf_s(msg, ARRAYSIZE(msg), format, argp);
+	va_end(argp);
+
+	TASKDIALOGCONFIG config = { 0 };
+	config.hMainIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON));
+	config.cbSize = sizeof(config);
+	config.pszMainIcon = icon;
+	config.pszWindowTitle = title;
+	config.pszContent = msg;
+	ProperTaskDialogIndirect(&config, NULL, NULL, NULL);
+}
+
 // Open hyperlink from TaskDialog
 HRESULT CALLBACK TaskDialogCallback(HWND hwnd, UINT uNotification, WPARAM wParam, LPARAM lParam, LONG_PTR dwRefData)
 {
@@ -132,7 +176,7 @@ static void AboutCallback(struct tray_menu* item)
 
 	swprintf_s(szTitle, ARRAYSIZE(szTitle), L"About %s", info_str[ProductName]);
 	swprintf_s(szHeader, ARRAYSIZE(szHeader), L"%s v%d.%d", info_str[ProductName], file_info->dwProductVersionMS >> 16, file_info->dwProductVersionMS & 0xffff);
-	wchar_t* szContent = L"Increase/decrease display brightness using nVidia controls.\nKeyboard shortcuts: Scroll Lock / Pause|Break";
+	const wchar_t* szContent = L"Increase/decrease display brightness using nVidia controls.\nKeyboard shortcuts: Scroll Lock / Pause|Break";
 	swprintf_s(szFooter, ARRAYSIZE(szFooter), L"Licensed under <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\">GPLv3</a>, %s", info_str[LegalCopyright]);
 	swprintf_s(szProject, ARRAYSIZE(szProject), L"Project page\n%s", info_str[Comments]);
 	swprintf_s(szReleaseUrl, ARRAYSIZE(szReleaseUrl), L"%s/releases/latest", info_str[Comments]);
@@ -140,22 +184,21 @@ static void AboutCallback(struct tray_menu* item)
 		{ 1001, szProject },
 		{ 1002, L"Latest release" },
 	};
-	TASKDIALOGCONFIG tdc = { 0 };
-	tdc.cbSize = sizeof(tdc);
-	tdc.dwFlags = TDF_USE_HICON_MAIN | TDF_USE_COMMAND_LINKS | TDF_ENABLE_HYPERLINKS | TDF_EXPANDED_BY_DEFAULT | TDF_EXPAND_FOOTER_AREA | TDF_ALLOW_DIALOG_CANCELLATION;
-	tdc.pButtons = aCustomButtons;
-	tdc.cButtons = sizeof(aCustomButtons) / sizeof(aCustomButtons[0]);
-	tdc.pszWindowTitle = szTitle;
-	tdc.nDefaultButton = IDOK;
-	tdc.hMainIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON));
-	tdc.pszMainInstruction = szHeader;
-	tdc.pszContent = szContent;
-	tdc.pszFooter = szFooter;
-	tdc.pszFooterIcon = TD_INFORMATION_ICON;
-	tdc.dwCommonButtons = TDCBF_OK_BUTTON;
-	tdc.pfCallback = TaskDialogCallback;
+	TASKDIALOGCONFIG config = { 0 };
+	config.cbSize = sizeof(config);
+	config.dwFlags = TDF_USE_HICON_MAIN | TDF_USE_COMMAND_LINKS | TDF_EXPANDED_BY_DEFAULT | TDF_EXPAND_FOOTER_AREA | TDF_ALLOW_DIALOG_CANCELLATION;
+	config.pButtons = aCustomButtons;
+	config.cButtons = sizeof(aCustomButtons) / sizeof(aCustomButtons[0]);
+	config.pszWindowTitle = szTitle;
+	config.nDefaultButton = IDOK;
+	config.hMainIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON));
+	config.pszMainInstruction = szHeader;
+	config.pszContent = szContent;
+	config.pszFooter = szFooter;
+	config.pszFooterIcon = TD_INFORMATION_ICON;
+	config.dwCommonButtons = TDCBF_OK_BUTTON;
 	int nClickedBtn;
-	if (SUCCEEDED(TaskDialogIndirect(&tdc, &nClickedBtn, NULL, NULL))) {
+	if (SUCCEEDED(ProperTaskDialogIndirect(&config, &nClickedBtn, NULL, NULL))) {
 		if (nClickedBtn == 1001)
 			ShellExecute(NULL, L"Open", info_str[Comments], NULL, NULL, SW_SHOW);
 		if (nClickedBtn == 1002)
@@ -384,7 +427,7 @@ int NvUpdateGamma(void)
 		if (displayCount == 0)
 			return -1;
 
-		NV_GPU_DISPLAYIDS* displayIds = calloc(displayCount, sizeof(NV_GPU_DISPLAYIDS));
+		NV_GPU_DISPLAYIDS* displayIds = (NV_GPU_DISPLAYIDS*)calloc(displayCount, sizeof(NV_GPU_DISPLAYIDS));
 		if (displayIds == NULL) {
 			logger("Could not allocate NV_GPU_DISPLAYIDS array\n");
 			return -1;
@@ -460,7 +503,7 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
 // Retrieving versioning and file information on Windows is a COMPLETE SHIT SHOW!!!
 #define GET_VERSION_INFO(x) do { swprintf_s(SubBlock, ARRAYSIZE(SubBlock), \
 	L"\\StringFileInfo\\%04x%04x\\" #x, lpTranslate[0].wLanguage, lpTranslate[0].wCodePage); \
-	VerQueryValue(version_data, SubBlock, &info_str[x], &size); } while(0)
+	VerQueryValue(version_data, SubBlock, (LPVOID*)&info_str[x], (PUINT)&size); } while(0)
 
 bool PopulateVersionData(void)
 {
@@ -483,11 +526,11 @@ bool PopulateVersionData(void)
 	if (!GetFileVersionInfo(exe_path, 0, size, version_data))
 		return false;
 
-	br = VerQueryValue(version_data, L"\\", (void**)&file_info, &size);
+	br = VerQueryValue(version_data, L"\\", (void**)&file_info, (PUINT)&size);
 	if (!br || file_info == NULL || size != sizeof(VS_FIXEDFILEINFO))
 		return false;
 
-	if (!VerQueryValue(version_data, L"\\VarFileInfo\\Translation", (LPVOID*)&lpTranslate, &size) ||
+	if (!VerQueryValue(version_data, L"\\VarFileInfo\\Translation", (LPVOID*)&lpTranslate, (PUINT)&size) ||
 		size < sizeof(struct LANGANDCODEPAGE))
 		return false;
 
@@ -498,44 +541,53 @@ bool PopulateVersionData(void)
 	return (info_str[0] != NULL && info_str[1] != NULL && info_str[2] != NULL);
 }
 
+// Main proc
 int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nShowCmd)
 {
 	static wchar_t menu_txt[64];
 	int ret = 1;
+	GUID guid = TRAY_ICON_GUID;
+	HHOOK hHook = NULL;
+
+	SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
 
 	if (!PopulateVersionData()) {
-		MessageBoxA(NULL, "Do NOT strip executable version information!", "That'll teach ya", MB_OK);
+		ProperMessageBox(TD_ERROR_ICON, L"No version information",
+			L"Version information could not be read from the executable.");
 		goto out;
 	}
 
 	if (NvInit() < 0 || NvGetGpuCount() < 1) {
-		MessageBoxA(NULL, "An nVidiaGPU could not be detected on this system.\n"
-			"This application will now exit.", "No nVidia GPU", MB_OK);
+		ProperMessageBox(TD_WARNING_ICON, L"No nVidia GPU",
+			L"An nVidia GPU could not be detected on this system.\n"
+			"%s will now exit.\n", info_str[ProductName]);
 		goto out;
 	}
 
 	if (ReadNvColorDataFromRegistry() < 0) {
-		MessageBoxA(NULL, "Could not read existing nVidia color settings from the registry.\n\n"
-			"You may have to adjust desktop color settings at least once, using the nVidia control panel.",
-			"No nVidia color settings", MB_OK);
+		ProperMessageBox(TD_WARNING_ICON, L"No nVidia color settings",
+			L"Could not read existing nVidia color settings from the registry.\n\n"
+			"You may have to adjust desktop color settings at least once, using the nVidia control panel.");
 		goto out;
 	}
 
-	HHOOK hHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandle(0), 0);
+	hHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandle(0), 0);
 	static struct tray_menu menu[] = {
-		{.text = L"About", .cb = AboutCallback },
-		{.text = L"Pause", .checked = 0, .cb = PauseCallback },
-		{.text = L"Use Internet navigation keys", .checked = 0, .cb = AlternateKeysCallback },
-		{.text = L"Exit", .cb = ExitCallback },
-		{.text = NULL }
+		{ .text = L"About", .cb = AboutCallback },
+		{ .text = L"Pause", .checked = 0, .cb = PauseCallback },
+		{ .text = L"Use Internet navigation keys", .checked = 0, .cb = AlternateKeysCallback },
+		{ .text = L"Exit", .cb = ExitCallback },
+		{ .text = NULL }
 	};
 	use_alternate_keys = (ReadRegistryKey32(REGKEY_HKCU, "UseAlternateKeys") != 0);
 	menu[2].checked = use_alternate_keys;
 	tray.icon =	LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + brightness / 5));
 	tray.menu = menu;
 
-	if (tray_init(&tray) < 0) {
-		OutputDebugStringA("Failed to create tray\n");
+	if (tray_init(&tray, info_str[ProductName], guid) < 0) {
+		ProperMessageBox(TD_ERROR_ICON, L"Failed to create tray application",
+			L"There was an error registering the tray application.\n"
+			"%s will now exit.\n", info_str[ProductName]);
 		return 1;
 	}
 	while (tray_loop(1) == 0);

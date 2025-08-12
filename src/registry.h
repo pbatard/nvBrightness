@@ -97,7 +97,7 @@ static __inline BOOL _SetRegistryKey(HKEY key_root, const char* key_name, DWORD 
 	HKEY hRoot = NULL, hApp = NULL;
 	DWORD dwDisp, dwType = reg_type;
 
-	if (key_name == NULL)
+	if (key_name == NULL || key_root == NULL)
 		return FALSE;
 	if (key_root != REGKEY_HKCU)
 		return FALSE;

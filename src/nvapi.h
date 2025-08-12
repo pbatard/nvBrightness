@@ -32,6 +32,10 @@
 #include <stdarg.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
 typedef int         NvAPI_Status;
 typedef uint8_t     NvU8;
 typedef uint16_t    NvU16;
@@ -99,7 +103,7 @@ typedef int (NVAPI_API_CALL *NVAPI_GETERRORMESSAGE) (NvAPI_Status, NvAPI_ShortSt
 typedef int (NVAPI_API_CALL *NVAPI_ENUMPHYSICALGPUS) (NvPhysicalGpuHandle*, NvU32*);
 typedef int (NVAPI_API_CALL *NVAPI_GPU_GETCONNECTEDDISPLAYIDS) (NvPhysicalGpuHandle, NV_GPU_DISPLAYIDS*, NvU32*, NvU32);
 typedef int (NVAPI_API_CALL *NVAPI_DISP_SETTARGETGAMMACORRECTION) (NvU32, NV_GAMMA_CORRECTION_EX*);
-typedef void (*NvAPI_Logger)(char*, ...);
+typedef void (*NvAPI_Logger)(const char*, ...);
 
 // The following works as long as the header is only ever used once
 static HINSTANCE NvAPI_Library = NULL;
@@ -158,3 +162,7 @@ static inline void NvAPI_Exit(void)
 	if (NvAPI_Library != NULL)
 		FreeLibrary(NvAPI_Library);
 }
+
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */
