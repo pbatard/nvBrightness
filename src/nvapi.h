@@ -50,6 +50,7 @@ typedef double      NvF64;
 #define NV_DECLARE_HANDLE(name) struct name##__ { int unused; }; typedef struct name##__ *name
 
 NV_DECLARE_HANDLE(NvPhysicalGpuHandle);
+NV_DECLARE_HANDLE(NvDisplayHandle);
 
 typedef NvPhysicalGpuHandle HM_ADAPTER_NVAPI;
 
@@ -102,7 +103,13 @@ typedef int (NVAPI_API_CALL *NVAPI_UNLOAD) (void);
 typedef int (NVAPI_API_CALL *NVAPI_GETERRORMESSAGE) (NvAPI_Status, NvAPI_ShortString);
 typedef int (NVAPI_API_CALL *NVAPI_ENUMPHYSICALGPUS) (NvPhysicalGpuHandle*, NvU32*);
 typedef int (NVAPI_API_CALL *NVAPI_GPU_GETCONNECTEDDISPLAYIDS) (NvPhysicalGpuHandle, NV_GPU_DISPLAYIDS*, NvU32*, NvU32);
+// Undocumented by nVidia. Takes a properly formatted NV_GAMMA_CORRECTION_EX* table.
 typedef int (NVAPI_API_CALL *NVAPI_DISP_SETTARGETGAMMACORRECTION) (NvU32, NV_GAMMA_CORRECTION_EX*);
+// Undocumented by nVidia. Straightforward.
+typedef int (NVAPI_API_CALL *NVAPI_DISP_GETDISPLAYHANDLEFROMDISPLAYID) (NvU32, NvDisplayHandle*);
+// Undocumented by nVidia. Appears to deal with a GUID internally rather than an LUID. Second parameter must be set to 1.
+typedef int (NVAPI_API_CALL* NVAPI_SYS_GETLUIDFROMDISPLAYID) (NvU32, NvU32, GUID*);
+typedef int (NVAPI_API_CALL *NVAPI_GETASSOCIATEDNVIDIADISPLAYNAME) (NvDisplayHandle, NvAPI_ShortString);
 typedef void (*NvAPI_Logger)(const char*, ...);
 
 // The following works as long as the header is only ever used once
@@ -114,6 +121,9 @@ static NVAPI_GETERRORMESSAGE NvAPI_GetErrorMessage = NULL;
 static NVAPI_ENUMPHYSICALGPUS NvAPI_EnumPhysicalGPUs = NULL;
 static NVAPI_GPU_GETCONNECTEDDISPLAYIDS NvAPI_GPU_GetConnectedDisplayIds = NULL;
 static NVAPI_DISP_SETTARGETGAMMACORRECTION NvAPI_DISP_SetTargetGammaCorrection = NULL;
+static NVAPI_SYS_GETLUIDFROMDISPLAYID NvAPI_SYS_GetLUIDFromDisplayID = NULL;
+static NVAPI_DISP_GETDISPLAYHANDLEFROMDISPLAYID NvAPI_DISP_GetDisplayHandleFromDisplayId = NULL;
+static NVAPI_GETASSOCIATEDNVIDIADISPLAYNAME NvAPI_GetAssociatedNvidiaDisplayName = NULL;
 
 #define NV_LOAD_FUNC(name, type, libname, logger) \
   name = (type) GetProcAddress(NvAPI_Library, #name); \
@@ -151,6 +161,9 @@ static inline int NvAPI_Init(NvAPI_Logger logger)
 	NV_LOAD_ADDR(NvAPI_EnumPhysicalGPUs, NVAPI_ENUMPHYSICALGPUS, nvapi_QueryInterface, 0xE5AC921F, NVAPI, logger);
 	NV_LOAD_ADDR(NvAPI_GPU_GetConnectedDisplayIds, NVAPI_GPU_GETCONNECTEDDISPLAYIDS, nvapi_QueryInterface, 0x0078DBA2, NVAPI, logger);
 	NV_LOAD_ADDR(NvAPI_DISP_SetTargetGammaCorrection, NVAPI_DISP_SETTARGETGAMMACORRECTION, nvapi_QueryInterface, 0x7082A053, NVAPI, logger);
+	NV_LOAD_ADDR(NvAPI_DISP_GetDisplayHandleFromDisplayId, NVAPI_DISP_GETDISPLAYHANDLEFROMDISPLAYID, nvapi_QueryInterface, 0x96437923, NVAPI, logger);
+	NV_LOAD_ADDR(NvAPI_SYS_GetLUIDFromDisplayID, NVAPI_SYS_GETLUIDFROMDISPLAYID, nvapi_QueryInterface, 0xD4A859F2, NVAPI, logger);
+	NV_LOAD_ADDR(NvAPI_GetAssociatedNvidiaDisplayName, NVAPI_GETASSOCIATEDNVIDIADISPLAYNAME, nvapi_QueryInterface, 0x22A78B05, NVAPI, logger);
 
 	return 0;
 }

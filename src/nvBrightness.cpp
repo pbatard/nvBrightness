@@ -35,6 +35,15 @@
 #include <commctrl.h>
 #include <shellscalingapi.h>
 
+#include <string>
+#include <iostream>
+#include <format>
+#include <list>
+using std::string;
+using std::wstring;
+using std::list;
+using std::format;
+
 #include "resource.h"
 #include "tray.h"
 #include "nvapi.h"
@@ -50,35 +59,60 @@
 #define TRAY_ICON_GUID { 0x64397973, 0xa694, 0x4640, { 0x80, 0x26, 0x96, 0x04, 0x46, 0x75, 0x00, 0x2b } }
 
 // nVidia Color data definitions
-#define NV_COLOR_RED                0
-#define NV_COLOR_GREEN              1
-#define NV_COLOR_BLUE               2
-#define NV_COLOR_MAX                3
+#define NV_COLOR_REGISTRY_INDEX     3538946
 
-#define NV_ATTR_BRIGHTNESS          0
-#define NV_ATTR_CONTRAST            1
-#define NV_ATTR_GAMMA               2
-#define NV_ATTR_MAX                 3
-
-#define NV_COLOR_REGISTRY_INDEX		3538946
-
-// Enums for the info_str[] array
 enum {
-	LegalCopyright = 0,
-	ProductName,
-	Comments,
+	nvColorRed = 0,
+	nvColorGreen,
+	nvColorBlue,
+	nvColorMax
+};
+
+enum {
+	nvAttrBrightness = 0,
+	nvAttrContrast,
+	nvAttrGamma,
+	nvAttrMax
+};
+
+// Structs
+typedef struct {
+	void* data;
+	VS_FIXEDFILEINFO* fixed;
+	wchar_t* ProductName;
+	wchar_t* CompanyName;
+	wchar_t* LegalCopyright;
+	wchar_t* Comments;
+} version_t;
+
+typedef struct {
+	bool enabled;
+	bool use_alternate_keys;
+	float increment;
+} settings_t;
+
+// Classes
+class nvDisplay {
+	uint32_t displayId;
+	wstring registryKeyString;
+	float colorSetting[nvAttrMax][nvColorMax];
+	string displayString;
+public:
+	nvDisplay(uint32_t);
+	string GetDisplayString();
+	bool UpdateGamma();
+	void ChangeBrightness(float delta);
+	float GetBrightness();
+	void SaveColorSettings(bool ApplyToAll);
+	static size_t EnumerateDisplays();
 };
 
 // Globals
-static int32_t brightness = 50;
-static int32_t nvColorSettings[NV_ATTR_MAX][NV_COLOR_MAX] = { 0 };
-static bool enabled = true;
-static bool use_alternate_keys = false;
+wchar_t *APPLICATION_NAME = NULL, *COMPANY_NAME = NULL;	// Needed for registry.h
+static version_t version = { 0 };
+static settings_t settings = { true, false, 0.5f };
 static struct tray tray;
-static void* version_data = NULL;
-static VS_FIXEDFILEINFO* file_info = NULL;
-static wchar_t* info_str[3] = { 0 };
-static uint16_t* gVersion = NULL;
+static list<nvDisplay> displayList;
 
 // Logging
 static void logger(const char* format, ...)
@@ -92,24 +126,79 @@ static void logger(const char* format, ...)
 	OutputDebugStringA(log_msg);
 }
 
-// Calculate the Gamma offset at a specific index.
-NvF32 CalculateGamma(NvS32 index, NvS32 brightness, NvS32 contrast, NvS32 gamma)
+static inline char* NvErrStr(NvAPI_Status r)
 {
-	NvF32 fBrightness, fContrast, fGamma;
+	static NvAPI_ShortString errStr = { 0 };
+	NvAPI_GetErrorMessage(r, errStr);
+	return errStr;
+}
 
-	fContrast = (NvF32)(contrast - 100) / 100.0f;
+// Helper functions
+static bool IsDarkModeEnabled(void)
+{
+	DWORD data = 0, size = sizeof(data);
+	if (RegGetValueA(HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+		"AppsUseLightTheme", RRF_RT_REG_DWORD, NULL, &data, &size) == ERROR_SUCCESS)
+		return (data == 0);
+	return false;
+}
+
+static string GetMonitorString(NvU32 displayId)
+{
+	NvAPI_Status r;
+	NvDisplayHandle displayHandle;
+	NvAPI_ShortString displayName;
+	DISPLAY_DEVICEA displayDevice, monitorDevice;
+	displayDevice.cb = sizeof(DISPLAY_DEVICEA);
+
+	r = NvAPI_DISP_GetDisplayHandleFromDisplayId(displayId, &displayHandle);
+	if (r != NVAPI_OK) {
+		logger("NvAPI_DISP_GetDisplayHandleFromDisplayId(0x%08x): %d %s\n", displayId, r, NvErrStr(r));
+		return "";
+	}
+	r = NvAPI_GetAssociatedNvidiaDisplayName(displayHandle, displayName);
+	if (r != NVAPI_OK) {
+		logger("NvAPI_GetAssociatedNvidiaDisplayName(0x%08x): %d %s\n", displayId, r, NvErrStr(r));
+		return "";
+	}
+
+	for (auto i = 0; EnumDisplayDevicesA(NULL, i, &displayDevice, 0); i++) {
+		if (_stricmp(displayDevice.DeviceName, displayName) != 0)
+			continue;
+		monitorDevice.cb = sizeof(DISPLAY_DEVICEA);
+		for (auto j = 0; EnumDisplayDevicesA(displayDevice.DeviceName, j, &monitorDevice, 0); ++j) {
+			if (monitorDevice.StateFlags & DISPLAY_DEVICE_ACTIVE)
+				return monitorDevice.DeviceString;
+		}
+	}
+	return "";
+}
+
+static int GetIconIndex(nvDisplay& display)
+{
+	int icon_index = (int)(display.GetBrightness() - 80.0f);
+	if (icon_index < 0)
+		icon_index = 0;
+	if (icon_index > 20)
+		icon_index = 20;
+	return icon_index;
+}
+
+NvF32 CalculateGamma(NvS32 index, NvF32 fBrightness, NvF32 fContrast, NvF32 fGamma)
+{
+	fContrast = (fContrast - 100.0f) / 100.0f;
 	if (fContrast <= 0.0f)
 		fContrast = (fContrast + 1.0f) * ((NvF32)index / 1023.0f - 0.5f);
 	else
 		fContrast = ((NvF32)index / 1023.0f - 0.5f) / (1.0f - fContrast);
 
-	fBrightness = (NvF32)(brightness - 100) / 100.0f + fContrast + 0.5f;
+	fBrightness = (fBrightness - 100.0f) / 100.0f + fContrast + 0.5f;
 	if (fBrightness < 0.0f)
 		fBrightness = 0.0f;
 	if (fBrightness > 1.0f)
 		fBrightness = 1.0f;
 
-	fGamma = (NvF32)pow((double)fBrightness, 1.0 / ((double)gamma / 100.0));
+	fGamma = (NvF32)pow((double)fBrightness, 1.0 / ((double)fGamma / 100.0));
 	if (fGamma < 0.0f)
 		fGamma = 0.0f;
 	if (fGamma > 1.0f)
@@ -118,14 +207,146 @@ NvF32 CalculateGamma(NvS32 index, NvS32 brightness, NvS32 contrast, NvS32 gamma)
 	return fGamma;
 }
 
-// Check if Dark Mode is active
-bool IsDarkModeEnabled(void)
+// nvDisplay methods
+nvDisplay::nvDisplay(uint32_t displayId)
 {
-	DWORD data = 0, size = sizeof(data);
-	if (RegGetValueA(HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-		"AppsUseLightTheme", RRF_RT_REG_DWORD, NULL, &data, &size) == ERROR_SUCCESS)
-		return (data == 0);
-	return false;
+	GUID guid = { 0 };
+	NvAPI_Status r;
+
+	this->displayId = displayId;
+	this->displayString = GetMonitorString(displayId);
+
+	r = NvAPI_SYS_GetLUIDFromDisplayID(displayId, 1, &guid);
+	if (r != NVAPI_OK) {
+		logger("NvAPI_SYS_GetLUIDFromDisplayID(0x%08x): %d %s\n", displayId, r, NvErrStr(r));
+		for (auto j = 0; j < 9; j++)
+			this->colorSetting[j / 3][j % 3] = 100.0f;
+	} else {
+		// The part we are after is the second DWORD of the GUID, XOR'd with 0xF00000000
+		this->registryKeyString = format(L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices\\{}-0\\Color",
+			((uint32_t*)&guid)[1] ^ 0xf0000000);
+		wchar_t RegColorKeyStr[128];
+		for (auto i = 0; i < 9; i++) {
+			swprintf_s(RegColorKeyStr, ARRAYSIZE(RegColorKeyStr),
+				L"%s\\%d", this->registryKeyString.c_str(), NV_COLOR_REGISTRY_INDEX + i);
+			this->colorSetting[i / 3][i % 3] = (float)ReadRegistryKey32(HKEY_CURRENT_USER, RegColorKeyStr);
+			// Set the default value if we couldn't read the key or it's out of bounds
+			if (this->colorSetting[i / 3][i % 3] < 80.0f || this->colorSetting[i / 3][i % 3] > 120.0f)
+				this->colorSetting[i / 3][i % 3] = 100.0f;
+		}
+	}
+}
+
+string nvDisplay::GetDisplayString()
+{
+	return this->displayString;
+}
+
+float nvDisplay::GetBrightness()
+{
+	float brightness = this->colorSetting[nvAttrBrightness][nvColorRed] +
+		this->colorSetting[nvAttrBrightness][nvColorGreen] +
+		this->colorSetting[nvAttrBrightness][nvColorBlue];
+	return brightness / 3.0f;
+}
+
+void nvDisplay::ChangeBrightness(float delta)
+{
+	for (auto Color = 0; Color < nvColorMax; Color++) {
+		this->colorSetting[nvAttrBrightness][Color] += delta;
+		if (this->colorSetting[nvAttrBrightness][Color] < 80.0f)
+			this->colorSetting[nvAttrBrightness][Color] = 80.0f;
+		if (this->colorSetting[nvAttrBrightness][Color] > 100.0f)
+			this->colorSetting[nvAttrBrightness][Color] = 100.0f;
+	}
+}
+
+bool nvDisplay::UpdateGamma()
+{
+	NV_GAMMA_CORRECTION_EX gammaCorrection;
+	NvAPI_Status r;
+
+	gammaCorrection.version = NVGAMMA_CORRECTION_EX_VER;
+	gammaCorrection.unknown = 1;
+
+	for (NvS32 Index = 0; Index < NV_GAMMARAMPEX_NUM_VALUES; Index++) {
+		for (auto Color = 0; Color < nvColorMax; Color++) {
+			gammaCorrection.gammaRampEx[nvColorMax * Index + Color] = CalculateGamma(
+				Index,
+				this->colorSetting[nvAttrBrightness][Color],
+				this->colorSetting[nvAttrContrast][Color],
+				this->colorSetting[nvAttrGamma][Color]
+			);
+		}
+	}
+
+	r = NvAPI_DISP_SetTargetGammaCorrection(this->displayId, &gammaCorrection);
+	if (r != NVAPI_OK)
+		logger("NvAPI_DISP_SetTargetGammaCorrection failed for display 0x%08x: %d %s\n", this->displayId, r, NvErrStr(r));
+
+	return r == NVAPI_OK;
+}
+
+void nvDisplay::SaveColorSettings(bool ApplyToAll)
+{
+	wchar_t RegColorKeyStr[128];
+
+	for (auto i = 0; i < 9; i++) {
+		swprintf_s(RegColorKeyStr, ARRAYSIZE(RegColorKeyStr),
+			L"%s\\%d", this->registryKeyString.c_str(), NV_COLOR_REGISTRY_INDEX + i);
+		WriteRegistryKey32(HKEY_CURRENT_USER, RegColorKeyStr, (uint32_t)this->colorSetting[i / 3][i % 3]);
+	}
+	// Add the NvCplGammaSet key to indicate that Gamma should be restored by the nVidia driver
+	swprintf_s(RegColorKeyStr, ARRAYSIZE(RegColorKeyStr), L"%s\\NvCplGammaSet", this->registryKeyString.c_str());
+	WriteRegistryKey32(HKEY_CURRENT_USER, RegColorKeyStr, 1);
+
+	// TODO: Add an option to apply to all displays
+}
+
+size_t nvDisplay::EnumerateDisplays()
+{
+	NvAPI_Status r;
+	NvPhysicalGpuHandle gpuHandles[NVAPI_MAX_PHYSICAL_GPUS] = { 0 };
+	NvU32 gpuCount = 0;
+
+	displayList.clear();
+
+	r = NvAPI_EnumPhysicalGPUs(gpuHandles, &gpuCount);
+	if (r != NVAPI_OK) {
+		logger("NvAPI_EnumPhysicalGPUs: %d %s\n", r, NvErrStr(r));
+		return -1;
+	}
+
+	for (NvU32 i = 0; i < gpuCount; i++) {
+		NvU32 displayCount = 0;
+
+		r = NvAPI_GPU_GetConnectedDisplayIds(gpuHandles[i], NULL, &displayCount, 0);
+		if (r != NVAPI_OK) {
+			logger("NvAPI_GPU_GetConnectedDisplayIds[%d]: %d %s\n", i, r, NvErrStr(r));
+			continue;
+		}
+
+		if (displayCount == 0)
+			continue;
+
+		NV_GPU_DISPLAYIDS* displayIds = (NV_GPU_DISPLAYIDS*)calloc(displayCount, sizeof(NV_GPU_DISPLAYIDS));
+		if (displayIds == NULL) {
+			logger("Could not allocate NV_GPU_DISPLAYIDS array\n");
+			return -1;
+		}
+		displayIds[0].version = NV_GPU_DISPLAYIDS_VER;
+
+		r = NvAPI_GPU_GetConnectedDisplayIds(gpuHandles[i], displayIds, &displayCount, 0);
+		if (r != NVAPI_OK) {
+			logger("NvAPI_GPU_GetConnectedDisplayIds[%d]: %d %s\n", i, r, NvErrStr(r));
+		} else {
+			for (NvU32 j = 0; j < displayCount; j++)
+				displayList.emplace_back(displayIds[j].displayId); // new nvDisplay(displayIds[j].displayId));
+		}
+		free(displayIds);
+	}
+
+	return displayList.size();
 }
 
 // Task dialogs and message boxes that do respect the user Dark Mode settings
@@ -155,7 +376,7 @@ static __inline void ProperMessageBox(wchar_t* icon, const wchar_t* title, const
 }
 
 // Open hyperlink from TaskDialog
-HRESULT CALLBACK TaskDialogCallback(HWND hwnd, UINT uNotification, WPARAM wParam, LPARAM lParam, LONG_PTR dwRefData)
+static HRESULT CALLBACK TaskDialogCallback(HWND hwnd, UINT uNotification, WPARAM wParam, LPARAM lParam, LONG_PTR dwRefData)
 {
 	if (uNotification == TDN_HYPERLINK_CLICKED) {
 		ShellExecute(hwnd, TEXT("open"), (TCHAR*)lParam, NULL, NULL, SW_SHOW);
@@ -174,19 +395,21 @@ static void AboutCallback(struct tray_menu* item)
 
 	(void)item;
 
-	swprintf_s(szTitle, ARRAYSIZE(szTitle), L"About %s", info_str[ProductName]);
-	swprintf_s(szHeader, ARRAYSIZE(szHeader), L"%s v%d.%d", info_str[ProductName], file_info->dwProductVersionMS >> 16, file_info->dwProductVersionMS & 0xffff);
+	swprintf_s(szTitle, ARRAYSIZE(szTitle), L"About %s", version.ProductName);
+	swprintf_s(szHeader, ARRAYSIZE(szHeader), L"%s v%d.%d", version.ProductName,
+		version.fixed->dwProductVersionMS >> 16, version.fixed->dwProductVersionMS & 0xffff);
 	const wchar_t* szContent = L"Increase/decrease display brightness using nVidia controls.\nKeyboard shortcuts: Scroll Lock / Pause|Break";
-	swprintf_s(szFooter, ARRAYSIZE(szFooter), L"Licensed under <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\">GPLv3</a>, %s", info_str[LegalCopyright]);
-	swprintf_s(szProject, ARRAYSIZE(szProject), L"Project page\n%s", info_str[Comments]);
-	swprintf_s(szReleaseUrl, ARRAYSIZE(szReleaseUrl), L"%s/releases/latest", info_str[Comments]);
+	swprintf_s(szFooter, ARRAYSIZE(szFooter), L"Licensed under <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\">GPLv3</a>, %s",
+		version.LegalCopyright);
+	swprintf_s(szProject, ARRAYSIZE(szProject), L"Project page\n%s", version.Comments);
+	swprintf_s(szReleaseUrl, ARRAYSIZE(szReleaseUrl), L"%s/releases/latest", version.Comments);
 	TASKDIALOG_BUTTON aCustomButtons[] = {
 		{ 1001, szProject },
 		{ 1002, L"Latest release" },
 	};
 	TASKDIALOGCONFIG config = { 0 };
 	config.cbSize = sizeof(config);
-	config.dwFlags = TDF_USE_HICON_MAIN | TDF_USE_COMMAND_LINKS | TDF_EXPANDED_BY_DEFAULT | TDF_EXPAND_FOOTER_AREA | TDF_ALLOW_DIALOG_CANCELLATION;
+	config.dwFlags = TDF_USE_HICON_MAIN | TDF_USE_COMMAND_LINKS | TDF_ENABLE_HYPERLINKS | TDF_EXPANDED_BY_DEFAULT | TDF_EXPAND_FOOTER_AREA | TDF_ALLOW_DIALOG_CANCELLATION;
 	config.pButtons = aCustomButtons;
 	config.cButtons = sizeof(aCustomButtons) / sizeof(aCustomButtons[0]);
 	config.pszWindowTitle = szTitle;
@@ -200,7 +423,7 @@ static void AboutCallback(struct tray_menu* item)
 	int nClickedBtn;
 	if (SUCCEEDED(ProperTaskDialogIndirect(&config, &nClickedBtn, NULL, NULL))) {
 		if (nClickedBtn == 1001)
-			ShellExecute(NULL, L"Open", info_str[Comments], NULL, NULL, SW_SHOW);
+			ShellExecute(NULL, L"Open", version.Comments, NULL, NULL, SW_SHOW);
 		if (nClickedBtn == 1002)
 			ShellExecute(NULL, L"Open", szReleaseUrl, NULL, NULL, SW_SHOW);
 	}
@@ -208,17 +431,16 @@ static void AboutCallback(struct tray_menu* item)
 
 static void AlternateKeysCallback(struct tray_menu* item)
 {
-	use_alternate_keys = !use_alternate_keys;
-	OutputDebugStringA("Alternate Keys: ");
-	OutputDebugStringA(use_alternate_keys ? "Enabled\n" : "Disabled\n");
+	settings.use_alternate_keys = !settings.use_alternate_keys;
+	logger("Alternate Keys: %s\n", settings.use_alternate_keys ? "Enabled" : "Disabled");
 	item->checked = !item->checked;
-	WriteRegistryKey32(REGKEY_HKCU, "UseAlternateKeys", item->checked);
+	WriteRegistryKey32(HKEY_CURRENT_USER, L"UseAlternateKeys", item->checked);
 	tray_update(&tray);
 }
 
 static void PauseCallback(struct tray_menu* item)
 {
-	enabled = !enabled;
+	settings.enabled = !settings.enabled;
 	item->checked = !item->checked;
 	tray_update(&tray);
 }
@@ -229,113 +451,10 @@ static void ExitCallback(struct tray_menu* item)
 	tray_exit();
 }
 
-// Registry procs
-static int ReadNvColorDataFromRegistry(void)
-{
-	int ret = -1;
-	wchar_t SubKeyName[128], ColorKeyName[32];
-	HKEY hDevices = NULL, hColorData = NULL;
-	DWORD i, j, size, type, cSubKeys = 0, cbName;
-
-	if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices", 0,
-		KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE | KEY_SET_VALUE, &hDevices) != ERROR_SUCCESS) {
-		logger("Could not open NVTweak\\Devices\n");
-		goto out;
-	}
-
-	if (RegQueryInfoKey(hDevices, NULL, NULL, NULL, &cSubKeys, NULL, NULL, NULL, NULL, NULL, NULL, NULL) != ERROR_SUCCESS || cSubKeys == 0) {
-		logger("Could not find NVTweak\\Devices subkeys\n");
-		goto out;
-	}
-
-	for (i = 0; i < cSubKeys; i++) {
-		cbName = ARRAYSIZE(SubKeyName);
-		if (RegEnumKeyEx(hDevices, i, SubKeyName, &cbName, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
-			continue;
-		wcsncat_s(SubKeyName, ARRAYSIZE(SubKeyName), L"\\Color", _TRUNCATE);
-		if (RegOpenKeyEx(hDevices, SubKeyName, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &hColorData) == ERROR_SUCCESS) {
-			for (j = 0; j < 9; j++) {
-				swprintf(ColorKeyName, ARRAYSIZE(ColorKeyName), L"%d", NV_COLOR_REGISTRY_INDEX + j);
-				size = sizeof(DWORD);
-				RegQueryValueEx(hColorData, ColorKeyName, 0, &type, (LPBYTE)&nvColorSettings[j / 3][j % 3], &size);
-			}
-			RegCloseKey(hColorData);
-		}
-	}
-
-	// Sanity/defaults check
-	for (j = 0; j < 9; j++) {
-		if (nvColorSettings[j / 3][j % 3] < 80 || nvColorSettings[j / 3][j % 3] > 120)
-			nvColorSettings[j / 3][j % 3] = 100;
-	}
-
-	// Compute our own brightness percentage
-	brightness = nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_RED] + nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_GREEN] + nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_BLUE];
-	brightness = (brightness / 3 - 80) * 5;
-	if (brightness < 0)
-		brightness = 0;
-	if (brightness > 100)
-		brightness = 100;
-	ret = 0;
-
-out:
-	if (hDevices != NULL)
-		RegCloseKey(hDevices);
-
-	return ret;
-}
-
-static int WriteNvColorDataToRegistry(void)
-{
-	int ret = -1;
-	wchar_t SubKeyName[128], ColorKeyName[32];
-	HKEY hDevices = NULL, hColorData = NULL;
-	DWORD i, j, size, type, val, cSubKeys = 0, cbName;
-
-	if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices", 0,
-		KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE | KEY_SET_VALUE, &hDevices) != ERROR_SUCCESS) {
-		logger("Could not open NVTweak\\Devices\n");
-		goto out;
-	}
-
-	if (RegQueryInfoKey(hDevices, NULL, NULL, NULL, &cSubKeys, NULL, NULL, NULL, NULL, NULL, NULL, NULL) != ERROR_SUCCESS || cSubKeys == 0) {
-		logger("Could not find NVTweak\\Devices subkeys\n");
-		goto out;
-	}
-
-	for (i = 0; i < cSubKeys; i++) {
-		cbName = ARRAYSIZE(SubKeyName);
-		if (RegEnumKeyEx(hDevices, i, SubKeyName, &cbName, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
-			continue;
-		wcsncat_s(SubKeyName, ARRAYSIZE(SubKeyName), L"\\Color", _TRUNCATE);
-		if (RegOpenKeyEx(hDevices, SubKeyName, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &hColorData) == ERROR_SUCCESS) {
-			// Only update the brightness values
-			for (j = 0; j < 3; j++) {
-				swprintf(ColorKeyName, ARRAYSIZE(ColorKeyName), L"%d", NV_COLOR_REGISTRY_INDEX + j);
-				size = sizeof(DWORD);
-				if (RegQueryValueEx(hColorData, ColorKeyName, 0, &type, (LPBYTE)&val, &size) != ERROR_SUCCESS) {
-					// Only update a brightness value if it already exists
-					continue;
-				}
-				if (RegSetValueEx(hColorData, ColorKeyName, 0, type, (LPBYTE)&nvColorSettings[NV_ATTR_BRIGHTNESS][j], size) != ERROR_SUCCESS)
-					logger("Failed to update %S\\%S value\n", SubKeyName, ColorKeyName);
-			}
-			RegCloseKey(hColorData);
-		}
-	}
-
-out:
-	if (hDevices != NULL)
-		RegCloseKey(hDevices);
-
-	return ret;
-}
-
 // nVidia API Procs
 static int NvInit(void)
 {
 	NvAPI_Status r;
-	NvAPI_ShortString errStr = { 0 };
 
 	if (NvAPI_Init(logger) != 0) {
 		logger("Failed to init NvAPI\n");
@@ -345,8 +464,7 @@ static int NvInit(void)
 		return -1;
 	r = NvAPI_Initialize();
 	if (r != NVAPI_OK) {
-		NvAPI_GetErrorMessage(r, errStr);
-		logger("NvAPI_Initialize: %d %s\n", r, errStr);
+		logger("NvAPI_Initialize: %d %s\n", r, NvErrStr(r));
 		if (NvAPI_Exit != NULL)
 			NvAPI_Exit();
 		return -1;
@@ -363,7 +481,6 @@ static __inline void NvExit(void)
 static int NvGetGpuCount(void)
 {
 	NvAPI_Status r;
-	NvAPI_ShortString errStr = { 0 };
 	NvPhysicalGpuHandle gpuHandles[NVAPI_MAX_PHYSICAL_GPUS] = { 0 };
 	NvU32 gpuCount = 0;
 
@@ -371,126 +488,45 @@ static int NvGetGpuCount(void)
 		return -1;
 	r = NvAPI_EnumPhysicalGPUs(gpuHandles, &gpuCount);
 	if (r != NVAPI_OK) {
-		NvAPI_GetErrorMessage(r, errStr);
-		logger("NvAPI_EnumPhysicalGPUs: %d %s\n", r, errStr);
+		logger("NvAPI_EnumPhysicalGPUs: %d %s\n", r, NvErrStr(r));
 		return -1;
 	}
 
 	return (int)gpuCount;
 }
 
-void NvCreateGammaCorrection(NV_GAMMA_CORRECTION_EX* gammaCorrection)
-{
-	gammaCorrection->version = NVGAMMA_CORRECTION_EX_VER;
-	gammaCorrection->unknown = 1;
-
-	for (NvS32 Index = 0; Index < NV_GAMMARAMPEX_NUM_VALUES; Index++) {
-		for (int Color = 0; Color < NV_COLOR_MAX; Color++) {
-			gammaCorrection->gammaRampEx[NV_COLOR_MAX * Index + Color] = CalculateGamma(
-				Index,
-				nvColorSettings[NV_ATTR_BRIGHTNESS][Color],
-				nvColorSettings[NV_ATTR_CONTRAST][Color],
-				nvColorSettings[NV_ATTR_GAMMA][Color]
-			);
-		}
-	}
-}
-
-int NvUpdateGamma(void)
-{
-	static NV_GAMMA_CORRECTION_EX gammaCorrection;
-	int ret = -1;
-	NvAPI_Status r;
-	NvAPI_ShortString errStr = { 0 };
-	NvPhysicalGpuHandle gpuHandles[NVAPI_MAX_PHYSICAL_GPUS] = { 0 };
-	NvU32 gpuCount = 0;
-
-	NvCreateGammaCorrection(&gammaCorrection);
-
-	r = NvAPI_EnumPhysicalGPUs(gpuHandles, &gpuCount);
-	if (r != NVAPI_OK) {
-		NvAPI_GetErrorMessage(r, errStr);
-		logger("NvAPI_EnumPhysicalGPUs: %d %s\n", r, errStr);
-		return -1;
-	}
-
-	for (NvU32 i = 0; i < gpuCount; i++) {
-		NvU32 displayCount = 0;
-
-		r = NvAPI_GPU_GetConnectedDisplayIds(gpuHandles[i], NULL, &displayCount, 0);
-		if (r != NVAPI_OK) {
-			NvAPI_GetErrorMessage(r, errStr);
-			logger("NvAPI_GPU_GetConnectedDisplayIds: %d %s\n", r, errStr);
-			return -1;
-		}
-
-		if (displayCount == 0)
-			return -1;
-
-		NV_GPU_DISPLAYIDS* displayIds = (NV_GPU_DISPLAYIDS*)calloc(displayCount, sizeof(NV_GPU_DISPLAYIDS));
-		if (displayIds == NULL) {
-			logger("Could not allocate NV_GPU_DISPLAYIDS array\n");
-			return -1;
-		}
-		displayIds[0].version = NV_GPU_DISPLAYIDS_VER;
-
-		r = NvAPI_GPU_GetConnectedDisplayIds(gpuHandles[i], displayIds, &displayCount, 0);
-		if (r == NVAPI_OK) {
-			for (NvU32 j = 0; j < displayCount; j++) {
-				r = NvAPI_DISP_SetTargetGammaCorrection(displayIds[j].displayId, &gammaCorrection);
-				if (r != NVAPI_OK) {
-					NvAPI_GetErrorMessage(r, errStr);
-					logger("NvAPI_DISP_SetTargetGammaCorrection failed for displayId[%d] (0x%08x): %d %s\n", j, displayIds[j].displayId, r, errStr);
-				} else {
-#ifdef _DEBUG
-					logger("Updated gamma for displayId[%d] = 0x%08x to %d%% brightness\n", j, displayIds[j].displayId, brightness);
-#endif
-					ret = 0;
-				}
-			}
-		}
-		free(displayIds);
-	}
-
-	return ret;
-}
-
 // Keyboard procs
-static void ChangeBrightness(bool bIncrease)
-{
-	static wchar_t menu_txt[64];
-
-	brightness += bIncrease ? +5 : -5;
-	if (brightness < 0)
-		brightness = 0;
-	if (brightness > 100)
-		brightness = 100;
-
-	nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_RED] = 80 + (brightness / 5);
-	nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_GREEN] = 80 + (brightness / 5);
-	nvColorSettings[NV_ATTR_BRIGHTNESS][NV_COLOR_BLUE] = 80 + (brightness / 5);
-	NvUpdateGamma();
-	WriteNvColorDataToRegistry();
-
-	tray.icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + brightness / 5));
-	tray_update(&tray);
-}
-
 static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
-	if (enabled && nCode == HC_ACTION && lParam != 0) {
+	if (settings.enabled && nCode == HC_ACTION && lParam != 0) {
 		KBDLLHOOKSTRUCT* kbhs = (KBDLLHOOKSTRUCT*)lParam;
 
-		if (!use_alternate_keys) {
+		if (!settings.use_alternate_keys) {
 			// TODO: Check if Alt/Ctrl/Shift are pressed and ignore then?
 			if ((kbhs->vkCode == VK_SCROLL || kbhs->vkCode == VK_PAUSE) && (kbhs->flags == 0x0)) {
-				ChangeBrightness((kbhs->vkCode == VK_PAUSE));
+				for (auto& display : displayList) {
+					display.ChangeBrightness((kbhs->vkCode == VK_PAUSE) ? settings.increment : -settings.increment);
+					display.UpdateGamma();
+					display.SaveColorSettings(false);
+				}
+				if (displayList.size() >= 1) {
+					tray.icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + GetIconIndex(displayList.front())));
+					tray_update(&tray);
+				}
 				return 1;
 			}
 		} else {
 			// Alternate way, that uses the Internet navigation keys
 			if ((kbhs->vkCode == VK_LEFT || kbhs->vkCode == VK_RIGHT) && ((kbhs->flags & 0xA1) == 0x21)) {
-				ChangeBrightness((kbhs->vkCode == VK_RIGHT));
+				for (auto& display : displayList) {
+					display.ChangeBrightness((kbhs->vkCode == VK_RIGHT) ? settings.increment : -settings.increment);
+					display.UpdateGamma();
+					display.SaveColorSettings(false);
+				}
+				if (displayList.size() >= 1) {
+					tray.icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + GetIconIndex(displayList.front())));
+					tray_update(&tray);
+				}
 				return 1;
 			}
 		}
@@ -501,9 +537,9 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
 
 // I've said it before and I'll say it again:
 // Retrieving versioning and file information on Windows is a COMPLETE SHIT SHOW!!!
-#define GET_VERSION_INFO(x) do { swprintf_s(SubBlock, ARRAYSIZE(SubBlock), \
-	L"\\StringFileInfo\\%04x%04x\\" #x, lpTranslate[0].wLanguage, lpTranslate[0].wCodePage); \
-	VerQueryValue(version_data, SubBlock, (LPVOID*)&info_str[x], (PUINT)&size); } while(0)
+#define GET_VERSION_INFO(name) do { swprintf_s(SubBlock, ARRAYSIZE(SubBlock), \
+	L"\\StringFileInfo\\%04x%04x\\" #name, lpTranslate[0].wLanguage, lpTranslate[0].wCodePage); \
+	VerQueryValue(version.data, SubBlock, (LPVOID*)&version.name, (PUINT)&size); } while(0)
 
 bool PopulateVersionData(void)
 {
@@ -519,26 +555,31 @@ bool PopulateVersionData(void)
 	size = GetFileVersionInfoSize(exe_path, &dummy);
 	if (size == 0)
 		return false;
-	version_data = malloc(size);	// freed on app exit
-	if (version_data == NULL)
+	version.data = malloc(size);	// freed on app exit
+	if (version.data == NULL)
 		return false;
 
-	if (!GetFileVersionInfo(exe_path, 0, size, version_data))
+	if (!GetFileVersionInfo(exe_path, 0, size, version.data))
 		return false;
 
-	br = VerQueryValue(version_data, L"\\", (void**)&file_info, (PUINT)&size);
-	if (!br || file_info == NULL || size != sizeof(VS_FIXEDFILEINFO))
+	br = VerQueryValue(version.data, L"\\", (void**)&version.fixed, (PUINT)&size);
+	if (!br || version.fixed == NULL || size != sizeof(VS_FIXEDFILEINFO))
 		return false;
 
-	if (!VerQueryValue(version_data, L"\\VarFileInfo\\Translation", (LPVOID*)&lpTranslate, (PUINT)&size) ||
+	if (!VerQueryValue(version.data, L"\\VarFileInfo\\Translation", (LPVOID*)&lpTranslate, (PUINT)&size) ||
 		size < sizeof(struct LANGANDCODEPAGE))
 		return false;
 
-	GET_VERSION_INFO(LegalCopyright);
 	GET_VERSION_INFO(ProductName);
+	GET_VERSION_INFO(CompanyName);
+	GET_VERSION_INFO(LegalCopyright);
 	GET_VERSION_INFO(Comments);
 
-	return (info_str[0] != NULL && info_str[1] != NULL && info_str[2] != NULL);
+	APPLICATION_NAME = version.ProductName;
+	COMPANY_NAME = version.CompanyName;
+
+	return (version.ProductName != NULL && version.CompanyName != NULL &&
+		version.LegalCopyright != NULL && version.Comments != NULL);
 }
 
 // Main proc
@@ -546,6 +587,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 {
 	static wchar_t menu_txt[64];
 	int ret = 1;
+	int icon_index = 20;
 	GUID guid = TRAY_ICON_GUID;
 	HHOOK hHook = NULL;
 
@@ -557,19 +599,21 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		goto out;
 	}
 
+	// Technically, someone might have an nVidia eGPU and want to run our app before they
+	// hotplug it, but I'd rather make it explicit for people who won't have an nVidia GPU
+	// anywhere near their system that the app will not be working for them
 	if (NvInit() < 0 || NvGetGpuCount() < 1) {
 		ProperMessageBox(TD_WARNING_ICON, L"No nVidia GPU",
 			L"An nVidia GPU could not be detected on this system.\n"
-			"%s will now exit.\n", info_str[ProductName]);
+			"%s will now exit.\n", version.ProductName);
 		goto out;
 	}
 
-	if (ReadNvColorDataFromRegistry() < 0) {
-		ProperMessageBox(TD_WARNING_ICON, L"No nVidia color settings",
-			L"Could not read existing nVidia color settings from the registry.\n\n"
-			"You may have to adjust desktop color settings at least once, using the nVidia control panel.");
-		goto out;
-	}
+	// Build the display list
+	nvDisplay::EnumerateDisplays();
+
+	for (auto& display : displayList)
+		logger("Found display: %s\n", display.GetDisplayString().c_str());
 
 	hHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandle(0), 0);
 	static struct tray_menu menu[] = {
@@ -579,15 +623,18 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		{ .text = L"Exit", .cb = ExitCallback },
 		{ .text = NULL }
 	};
-	use_alternate_keys = (ReadRegistryKey32(REGKEY_HKCU, "UseAlternateKeys") != 0);
-	menu[2].checked = use_alternate_keys;
-	tray.icon =	LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + brightness / 5));
+	settings.use_alternate_keys = (ReadRegistryKey32(HKEY_CURRENT_USER, L"UseAlternateKeys") != 0);
+	menu[2].checked = settings.use_alternate_keys;
+
+	if (displayList.size() >= 1)
+		icon_index = GetIconIndex(displayList.front());
+	tray.icon =	LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + icon_index));
 	tray.menu = menu;
 
-	if (tray_init(&tray, info_str[ProductName], guid) < 0) {
+	if (tray_init(&tray, version.ProductName, guid) < 0) {
 		ProperMessageBox(TD_ERROR_ICON, L"Failed to create tray application",
 			L"There was an error registering the tray application.\n"
-			"%s will now exit.\n", info_str[ProductName]);
+			"%s will now exit.\n", version.ProductName);
 		return 1;
 	}
 	while (tray_loop(1) == 0);
@@ -596,10 +643,13 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	ret = 0;
 
 out:
+	displayList.clear();
 	NvExit();
-	free(version_data);
+	free(version.data);
 #ifdef _DEBUG
-	_CrtDumpMemoryLeaks();
+	// NB: You don't want to use _CrtDumpMemoryLeaks() with C++.
+	// See: https://stackoverflow.com/a/5266164/1069307
+	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 #endif
 	return ret;
 }

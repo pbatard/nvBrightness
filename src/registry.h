@@ -1,7 +1,7 @@
 /*
- * Rufus: The Reliable USB Formatting Utility
+ * nvBrightness - nVidia Control Panel brightness at your fingertips
  * Registry access
- * Copyright © 2012-2022 Pete Batard <pete@akeo.ie>
+ * Copyright © 2012-2025 Pete Batard <pete@akeo.ie>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,19 +25,16 @@
 extern "C" {
 #endif
 
-#define REGKEY_HKCU                 HKEY_CURRENT_USER
-#define REGKEY_HKLM                 HKEY_LOCAL_MACHINE
-#define COMPANY_NAME                "Akeo Consulting"
-#define APPLICATION_NAME            "nvBrightness"
+extern wchar_t *APPLICATION_NAME, *COMPANY_NAME;
 
 /*
  * Read a generic registry key value. If a short key_name is used, assume that
  * it belongs to the application and create the app subkey if required
  */
-static __inline BOOL _GetRegistryKey(HKEY key_root, const char* key_name, DWORD reg_type,
+static __inline BOOL _GetRegistryKey(HKEY key_root, const wchar_t* key_name, DWORD reg_type,
 	LPBYTE dest, DWORD dest_size)
 {
-	char long_key_name[MAX_PATH] = { 0 };
+	wchar_t long_key_name[MAX_PATH] = { 0 };
 	BOOL r = FALSE;
 	size_t i;
 	LONG s;
@@ -46,38 +43,39 @@ static __inline BOOL _GetRegistryKey(HKEY key_root, const char* key_name, DWORD 
 
 	memset(dest, 0, dest_size);
 
-	if (key_name == NULL)
+	if (key_name == NULL || COMPANY_NAME == NULL || APPLICATION_NAME == NULL)
 		return FALSE;
 
-	for (i = strlen(key_name); i > 0; i--) {
+	for (i = wcslen(key_name); i > 0; i--) {
 		if (key_name[i] == '\\')
 			break;
 	}
 
 	if (i > 0) {
-		// For a read operation, allow access to any long key
-		if (i >= sizeof(long_key_name))
+		if (i >= ARRAYSIZE(long_key_name))
 			return FALSE;
-		strcpy_s(long_key_name, sizeof(long_key_name), key_name);
+		wcscpy_s(long_key_name, ARRAYSIZE(long_key_name), key_name);
 		long_key_name[i] = 0;
 		i++;
-		if (RegOpenKeyExA(key_root, long_key_name, 0, KEY_READ, &hApp) != ERROR_SUCCESS) {
+		if (RegOpenKeyEx(key_root, long_key_name, 0, KEY_READ, &hApp) != ERROR_SUCCESS) {
 			hApp = NULL;
 			goto out;
 		}
 	} else {
-		if (RegOpenKeyExA(key_root, "SOFTWARE", 0, KEY_READ|KEY_CREATE_SUB_KEY, &hSoftware) != ERROR_SUCCESS) {
+		wchar_t key_base[128];
+		wsprintf(key_base, L"%s\\%s", COMPANY_NAME, APPLICATION_NAME);
+		if (RegOpenKeyEx(key_root, L"SOFTWARE", 0, KEY_READ|KEY_CREATE_SUB_KEY, &hSoftware) != ERROR_SUCCESS) {
 			hSoftware = NULL;
 			goto out;
 		}
-		if (RegCreateKeyExA(hSoftware, COMPANY_NAME "\\" APPLICATION_NAME, 0, NULL, 0,
+		if (RegCreateKeyEx(hSoftware, key_base, 0, NULL, 0,
 			KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_CREATE_SUB_KEY, NULL, &hApp, &dwDisp) != ERROR_SUCCESS) {
 			hApp = NULL;
 			goto out;
 		}
 	}
 
-	s = RegQueryValueExA(hApp, &key_name[i], NULL, &dwType, (LPBYTE)dest, &dwSize);
+	s = RegQueryValueEx(hApp, &key_name[i], NULL, &dwType, (LPBYTE)dest, &dwSize);
 	// No key means default value of 0 or empty string
 	if ((s == ERROR_FILE_NOT_FOUND) || ((s == ERROR_SUCCESS) && (dwType == reg_type) && (dwSize > 0))) {
 		r = TRUE;
@@ -91,37 +89,53 @@ out:
 }
 
 /* Write a generic registry key value (create the key if it doesn't exist) */
-static __inline BOOL _SetRegistryKey(HKEY key_root, const char* key_name, DWORD reg_type, LPBYTE src, DWORD src_size)
+static __inline BOOL _SetRegistryKey(HKEY key_root, const wchar_t* key_name, DWORD reg_type, LPBYTE src, DWORD src_size)
 {
+	wchar_t long_key_name[MAX_PATH] = { 0 };
 	BOOL r = FALSE;
-	HKEY hRoot = NULL, hApp = NULL;
+	size_t i;
+	HKEY hSoftware = NULL, hApp = NULL;
 	DWORD dwDisp, dwType = reg_type;
 
-	if (key_name == NULL || key_root == NULL)
+	if (key_name == NULL || key_root == NULL || COMPANY_NAME == NULL || APPLICATION_NAME == NULL)
 		return FALSE;
-	if (key_root != REGKEY_HKCU)
-		return FALSE;
-	// Validate that we are always dealing with a short key
-	if (strchr(key_name, '\\') != NULL)
+	if (key_root != HKEY_CURRENT_USER)
 		return FALSE;
 
-	if (RegOpenKeyExA(key_root, NULL, 0, KEY_READ|KEY_CREATE_SUB_KEY, &hRoot) != ERROR_SUCCESS) {
-		hRoot = NULL;
-		goto out;
+	for (i = wcslen(key_name); i > 0; i--) {
+		if (key_name[i] == '\\')
+			break;
 	}
 
-	// This is a short key name, store the value under our app sub-hive
-	if (RegCreateKeyExA(hRoot, "SOFTWARE\\" COMPANY_NAME "\\" APPLICATION_NAME, 0, NULL, 0,
-		KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_CREATE_SUB_KEY, NULL, &hApp, &dwDisp) != ERROR_SUCCESS) {
-		hApp = NULL;
-		goto out;
+	if (i > 0) {
+		if (i >= ARRAYSIZE(long_key_name))
+			return FALSE;
+		wcscpy_s(long_key_name, ARRAYSIZE(long_key_name), key_name);
+		long_key_name[i] = 0;
+		i++;
+		if (RegOpenKeyEx(key_root, long_key_name, 0, KEY_READ | KEY_WRITE, &hApp) != ERROR_SUCCESS) {
+			hApp = NULL;
+			goto out;
+		}
+	} else {
+		wchar_t key_base[128];
+		wsprintf(key_base, L"%s\\%s", COMPANY_NAME, APPLICATION_NAME);
+		if (RegOpenKeyEx(key_root, L"SOFTWARE", 0, KEY_READ | KEY_WRITE | KEY_CREATE_SUB_KEY, &hSoftware) != ERROR_SUCCESS) {
+			hSoftware = NULL;
+			goto out;
+		}
+		if (RegCreateKeyEx(hSoftware, key_base, 0, NULL, 0,
+			KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_CREATE_SUB_KEY, NULL, &hApp, &dwDisp) != ERROR_SUCCESS) {
+			hApp = NULL;
+			goto out;
+		}
 	}
 
-	r = (RegSetValueExA(hApp, key_name, 0, dwType, src, src_size) == ERROR_SUCCESS);
+	r = (RegSetValueExW(hApp, &key_name[i], NULL, dwType, src, src_size) == ERROR_SUCCESS);
 
 out:
-	if (hRoot != NULL)
-		RegCloseKey(hRoot);
+	if (hSoftware != NULL)
+		RegCloseKey(hSoftware);
 	if (hApp != NULL)
 		RegCloseKey(hApp);
 	return r;
@@ -131,16 +145,16 @@ out:
 #define GetRegistryKey64(root, key, pval) _GetRegistryKey(root, key, REG_QWORD, (LPBYTE)pval, sizeof(LONGLONG))
 #define SetRegistryKey64(root, key, val) _SetRegistryKey(root, key, REG_QWORD, (LPBYTE)&val, sizeof(LONGLONG))
 // Check that a key is accessible for R/W (will create a key if not already existing)
-static __inline BOOL CheckRegistryKey64(HKEY root, const char* key) {
+static __inline BOOL CheckRegistryKey64(HKEY root, const wchar_t* key) {
 	LONGLONG val;
 	return GetRegistryKey64(root, key, &val);
 }
-static __inline int64_t ReadRegistryKey64(HKEY root, const char* key) {
+static __inline int64_t ReadRegistryKey64(HKEY root, const wchar_t* key) {
 	LONGLONG val;
 	GetRegistryKey64(root, key, &val);
 	return (int64_t)val;
 }
-static __inline BOOL WriteRegistryKey64(HKEY root, const char* key, int64_t val) {
+static __inline BOOL WriteRegistryKey64(HKEY root, const wchar_t* key, int64_t val) {
 	LONGLONG tmp = (LONGLONG)val;
 	return SetRegistryKey64(root, key, tmp);
 }
@@ -148,16 +162,16 @@ static __inline BOOL WriteRegistryKey64(HKEY root, const char* key, int64_t val)
 /* Helpers for 32 bit registry operations */
 #define GetRegistryKey32(root, key, pval) _GetRegistryKey(root, key, REG_DWORD, (LPBYTE)pval, sizeof(DWORD))
 #define SetRegistryKey32(root, key, val) _SetRegistryKey(root, key, REG_DWORD, (LPBYTE)&val, sizeof(DWORD))
-static __inline BOOL CheckRegistryKey32(HKEY root, const char* key) {
+static __inline BOOL CheckRegistryKey32(HKEY root, const wchar_t* key) {
 	DWORD val;
 	return (GetRegistryKey32(root, key, &val) && SetRegistryKey32(root, key, val));
 }
-static __inline int32_t ReadRegistryKey32(HKEY root, const char* key) {
+static __inline int32_t ReadRegistryKey32(HKEY root, const wchar_t* key) {
 	DWORD val;
 	GetRegistryKey32(root, key, &val);
 	return (int32_t)val;
 }
-static __inline BOOL WriteRegistryKey32(HKEY root, const char* key, int32_t val) {
+static __inline BOOL WriteRegistryKey32(HKEY root, const wchar_t* key, int32_t val) {
 	DWORD tmp = (DWORD)val;
 	return SetRegistryKey32(root, key, tmp);
 }
@@ -169,12 +183,12 @@ static __inline BOOL WriteRegistryKey32(HKEY root, const char* key, int32_t val)
 
 /* Helpers for String registry operations */
 #define GetRegistryKeyStr(root, key, str, len) _GetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)len)
-#define SetRegistryKeyStr(root, key, str) _SetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)safe_strlen(str))
+#define SetRegistryKeyStr(root, key, str) _SetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)wcslen(str))
 // Use a static buffer - don't allocate
-static __inline char* ReadRegistryKeyStr(HKEY root, const char* key) {
-	static char str[512];
+static __inline wchar_t* ReadRegistryKeyStr(HKEY root, const wchar_t* key) {
+	static wchar_t str[512];
 	str[0] = 0;
-	_GetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)sizeof(str)-1);
+	_GetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)ARRAYSIZE(str)-1);
 	return str;
 }
 #define WriteRegistryKeyStr SetRegistryKeyStr

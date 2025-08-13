@@ -39,16 +39,13 @@ might also find useful for you, but which I am not planning to expand for your s
    brightness integer between `80` and `120`, with `100` being the normal brightness value
    (hence why there are really only 20 brightness steps between darkest and normal).
 4. For good measure, and so that the nVidia driver reapplies the brightness settings on
-   startup/change of screen, we also update **all** the `BrightnessRed`/`BrightnessGreen`/
+   startup/change of screen, we also update the relevant `BrightnessRed`/`BrightnessGreen`/
    `BrightnessBlue` registry values (Registry Keys `3538946`/`3538947`/`3538948`) under
-   `HKEY_CURRENT_USER\Software\NVIDIA Corporation\Global\NVTweak\Devices\...`. This includes
-   both the current monitor **and** every other monitor for which these values also exist.
-   Note that the `XXXXXXXXXX-0` value nVidia uses for monitor devices is sadly different
-   from any monitor ID that Windows or the nVidia API reports (it seems to be a private,
-   internal ID, possibly the CRC32 of some string, that the driver uses, and that is a major
-   PITA to try to reverse engineer), so we currently have no means to equate a specific
-   registry entry to a specific monitor.
-   Also note that, on startup, we do read from these values to try to guess what our last
+   `HKEY_CURRENT_USER\Software\NVIDIA Corporation\Global\NVTweak\Devices\###########-0`.
+   Note that the `###########-0` value associated to the display (which is **not** an nVidia
+   `displayID`, because that would be too easy) is retrieved by calling the **undocumented**
+   `NvAPI_SYS_GetLUIDFromDisplayID()` nVidia API.
+   Also note that, on startup, we do read from these values to find what the current nVidia
    brightness was set to.
 
 
