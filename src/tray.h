@@ -61,6 +61,8 @@ struct tray_menu {
 	struct tray_menu* submenu;
 };
 
+typedef bool (*hotkey_cb)(WPARAM, LPARAM);
+
 static void tray_update(struct tray* tray);
 
 #define WM_TRAY_CALLBACK_MESSAGE (WM_USER + 1)
@@ -71,6 +73,7 @@ static NOTIFYICONDATA nid;
 static HWND hwnd;
 static HMENU hmenu = NULL;
 static const wchar_t* class_name = NULL;
+static hotkey_cb hkcb;
 
 static LRESULT CALLBACK _tray_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	switch (msg) {
@@ -105,6 +108,10 @@ static LRESULT CALLBACK _tray_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARA
 			}
 			return 0;
 		}
+		break;
+	case WM_HOTKEY:
+		if (hkcb && hkcb(wparam, lparam))
+			return 0;
 		break;
 	}
 	return DefWindowProc(hwnd, msg, wparam, lparam);
@@ -164,7 +171,7 @@ static void tray_enable_dark_mode() {
 }
 
 // Using a GUID ensures that Windows recognizes the app even if it changes version or has its .exe moved
-static int tray_init(struct tray* tray, const wchar_t* name, const GUID guid) {
+static int tray_init(struct tray* tray, const wchar_t* name, const GUID guid, hotkey_cb cb) {
 	if (!tray || !name) return -1;
 
 	class_name = name;
@@ -177,6 +184,7 @@ static int tray_init(struct tray* tray, const wchar_t* name, const GUID guid) {
 		return -1;
 	}
 
+	hkcb = cb;
 	hwnd = CreateWindowEx(0, class_name, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 	if (hwnd == NULL) {
 		return -1;
@@ -194,6 +202,21 @@ static int tray_init(struct tray* tray, const wchar_t* name, const GUID guid) {
 
 	tray_update(tray);
 	return 0;
+}
+
+// Register a hotkey through RegisterHotKey().
+// Should be called *after* and *if* a callback was provided to tray_init().
+static bool tray_register_hotkey(int id, UINT modifiers, UINT vk)
+{
+	if (!hwnd || !hkcb)
+		return false;
+	return RegisterHotKey(hwnd, id, modifiers, vk);
+}
+
+static void tray_unregister_hotkkey(int id)
+{
+	if (hwnd)
+		UnregisterHotKey(hwnd, id);
 }
 
 static int tray_loop(int blocking) {

@@ -75,6 +75,15 @@ enum {
 	nvAttrMax
 };
 
+enum {
+	hkDecreaseBrightness = 0,
+	hkIncreaseBrightness,
+	hkDecreaseBrightness2,
+	hkIncreaseBrightness2,
+	hkPowerOffMonitor,
+	hkMax
+};
+
 // Structs
 typedef struct {
 	void* data;
@@ -205,6 +214,33 @@ NvF32 CalculateGamma(NvS32 index, NvF32 fBrightness, NvF32 fContrast, NvF32 fGam
 		fGamma = 1.0f;
 
 	return fGamma;
+}
+
+static void UnRegisterHotKeys(void)
+{
+	for (int hk = 0; hk < hkMax; hk++)
+		tray_unregister_hotkkey(hk);
+}
+
+static bool RegisterHotKeys(bool alt_mode)
+{
+	UnRegisterHotKeys();
+	bool b = tray_register_hotkey(hkPowerOffMonitor, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_END);
+
+	if (alt_mode) {
+		// Allegedly, per https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey#remarks
+		// "If a hot key already exists with the same hWnd and id parameters, it is maintained along with the new hot key"
+		// so, we should be able to register VK_BROWSER_FORWARD and Alt → with the same ID.
+		// In practice however, THIS DOES NOT WORK for some combinations, and it causes the hotkeys to be ignored.
+		// So we have to use different IDs even if we want to map 2 keys to the same action...
+		return (b && tray_register_hotkey(hkIncreaseBrightness, MOD_ALT, VK_RIGHT) &&
+			tray_register_hotkey(hkDecreaseBrightness, MOD_ALT, VK_LEFT) &&
+			tray_register_hotkey(hkIncreaseBrightness2, 0, VK_BROWSER_FORWARD) &&
+			tray_register_hotkey(hkDecreaseBrightness2, 0, VK_BROWSER_BACK));
+	} else {
+		return (b && tray_register_hotkey(hkIncreaseBrightness, MOD_WIN | MOD_SHIFT, VK_PRIOR) &&
+			tray_register_hotkey(hkDecreaseBrightness, MOD_WIN | MOD_SHIFT, VK_NEXT));
+	}
 }
 
 // nvDisplay methods
@@ -432,6 +468,7 @@ static void AboutCallback(struct tray_menu* item)
 static void AlternateKeysCallback(struct tray_menu* item)
 {
 	settings.use_alternate_keys = !settings.use_alternate_keys;
+	RegisterHotKeys(settings.use_alternate_keys);
 	logger("Alternate Keys: %s\n", settings.use_alternate_keys ? "Enabled" : "Disabled");
 	item->checked = !item->checked;
 	WriteRegistryKey32(HKEY_CURRENT_USER, L"UseAlternateKeys", item->checked);
@@ -442,13 +479,60 @@ static void PauseCallback(struct tray_menu* item)
 {
 	settings.enabled = !settings.enabled;
 	item->checked = !item->checked;
+	if (settings.enabled)
+		RegisterHotKeys(settings.use_alternate_keys);
+	else
+		UnRegisterHotKeys();
 	tray_update(&tray);
+}
+
+static void PowerOffCallback(struct tray_menu* item)
+{
+	(void)item;
+	SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
 }
 
 static void ExitCallback(struct tray_menu* item)
 {
 	(void)item;
 	tray_exit();
+}
+
+// Callback for keyboard hotkeys
+static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
+{
+	float delta = 0.0f;
+
+	if (wparam < 0 || wparam >= hkMax)
+		return false;
+	switch (wparam) {
+	case hkDecreaseBrightness:
+	case hkDecreaseBrightness2:
+		delta = -2.0f * settings.increment;
+		[[fallthrough]];
+	case hkIncreaseBrightness:
+	case hkIncreaseBrightness2:
+		delta += settings.increment;
+
+		for (auto& display : displayList) {
+			display.ChangeBrightness(delta);
+			display.UpdateGamma();
+			display.SaveColorSettings(false);
+		}
+		if (displayList.size() >= 1) {
+			tray.icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + GetIconIndex(displayList.front())));
+			tray_update(&tray);
+		}
+		break;
+	case hkPowerOffMonitor:
+		SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
+		break;
+	default:
+		logger("Unhandled Hot Key!\n");
+		break;
+	}
+
+	return true;
 }
 
 // nVidia API Procs
@@ -493,46 +577,6 @@ static int NvGetGpuCount(void)
 	}
 
 	return (int)gpuCount;
-}
-
-// Keyboard procs
-static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
-{
-	if (settings.enabled && nCode == HC_ACTION && lParam != 0) {
-		KBDLLHOOKSTRUCT* kbhs = (KBDLLHOOKSTRUCT*)lParam;
-
-		if (!settings.use_alternate_keys) {
-			// TODO: Check if Alt/Ctrl/Shift are pressed and ignore then?
-			if ((kbhs->vkCode == VK_SCROLL || kbhs->vkCode == VK_PAUSE) && (kbhs->flags == 0x0)) {
-				for (auto& display : displayList) {
-					display.ChangeBrightness((kbhs->vkCode == VK_PAUSE) ? settings.increment : -settings.increment);
-					display.UpdateGamma();
-					display.SaveColorSettings(false);
-				}
-				if (displayList.size() >= 1) {
-					tray.icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + GetIconIndex(displayList.front())));
-					tray_update(&tray);
-				}
-				return 1;
-			}
-		} else {
-			// Alternate way, that uses the Internet navigation keys
-			if ((kbhs->vkCode == VK_LEFT || kbhs->vkCode == VK_RIGHT) && ((kbhs->flags & 0xA1) == 0x21)) {
-				for (auto& display : displayList) {
-					display.ChangeBrightness((kbhs->vkCode == VK_RIGHT) ? settings.increment : -settings.increment);
-					display.UpdateGamma();
-					display.SaveColorSettings(false);
-				}
-				if (displayList.size() >= 1) {
-					tray.icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + GetIconIndex(displayList.front())));
-					tray_update(&tray);
-				}
-				return 1;
-			}
-		}
-	}
-
-	return CallNextHookEx(NULL, nCode, wParam, lParam);
 }
 
 // I've said it before and I'll say it again:
@@ -589,7 +633,6 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	int ret = 1;
 	int icon_index = 20;
 	GUID guid = TRAY_ICON_GUID;
-	HHOOK hHook = NULL;
 
 	SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
 
@@ -615,34 +658,44 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	for (auto& display : displayList)
 		logger("Found display: %s\n", display.GetDisplayString().c_str());
 
-	hHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandle(0), 0);
+	// Create the tray menu
 	static struct tray_menu menu[] = {
 		{ .text = L"About", .cb = AboutCallback },
 		{ .text = L"Pause", .checked = 0, .cb = PauseCallback },
-		{ .text = L"Use Internet navigation keys", .checked = 0, .cb = AlternateKeysCallback },
+		{ .text = L"-" },
+		{ .text = L"Default keys: [Win+Shift+PgUp] / [Win+Shift+PgDn]", .disabled = 1 },
+		{ .text = L"Use Internet navigation keys / [Alt+Arrows]", .checked = 0, .cb = AlternateKeysCallback },
+		{ .text = L"Power off all displays [Win+Shift+End]", .checked = 0, .cb = PowerOffCallback },
+		{ .text = L"-" },
 		{ .text = L"Exit", .cb = ExitCallback },
 		{ .text = NULL }
 	};
 	settings.use_alternate_keys = (ReadRegistryKey32(HKEY_CURRENT_USER, L"UseAlternateKeys") != 0);
-	menu[2].checked = settings.use_alternate_keys;
+	menu[4].checked = settings.use_alternate_keys;
 
 	if (displayList.size() >= 1)
 		icon_index = GetIconIndex(displayList.front());
 	tray.icon =	LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + icon_index));
 	tray.menu = menu;
 
-	if (tray_init(&tray, version.ProductName, guid) < 0) {
+	if (tray_init(&tray, version.ProductName, guid, HotkeyCallback) < 0) {
 		ProperMessageBox(TD_ERROR_ICON, L"Failed to create tray application",
 			L"There was an error registering the tray application.\n"
 			"%s will now exit.\n", version.ProductName);
 		return 1;
 	}
+
+	// Register the keyboard shortcuts
+	if (!RegisterHotKeys(settings.use_alternate_keys))
+		logger("Could not register hot keys!\n");
+
+	// Process tray application messages
 	while (tray_loop(1) == 0);
 
-	UnhookWindowsHookEx(hHook);
 	ret = 0;
 
 out:
+	UnRegisterHotKeys();
 	displayList.clear();
 	NvExit();
 	free(version.data);
