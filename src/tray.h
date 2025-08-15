@@ -206,17 +206,20 @@ static int tray_init(struct tray* tray, const wchar_t* name, const GUID guid, ho
 
 // Register a hotkey through RegisterHotKey().
 // Should be called *after* and *if* a callback was provided to tray_init().
-static bool tray_register_hotkey(int id, UINT modifiers, UINT vk)
-{
+static bool tray_register_hotkey(int id, UINT modifiers, UINT vk) {
 	if (!hwnd || !hkcb)
 		return false;
 	return RegisterHotKey(hwnd, id, modifiers, vk);
 }
 
-static void tray_unregister_hotkkey(int id)
-{
+static void tray_unregister_hotkkey(int id) {
 	if (hwnd)
 		UnregisterHotKey(hwnd, id);
+}
+
+static void tray_simulate_hottkey(int id) {
+	if (hwnd)
+		SendMessage(hwnd, WM_HOTKEY, (WPARAM)id, NULL);
 }
 
 static int tray_loop(int blocking) {

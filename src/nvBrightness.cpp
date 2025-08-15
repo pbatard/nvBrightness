@@ -51,8 +51,8 @@ using std::format;
 #include "DarkTaskDialog.hpp"
 
 #pragma comment(lib, "comctl32.lib")
-#pragma comment(lib, "version.lib")
 #pragma comment(lib, "shcore.lib")
+#pragma comment(lib, "version.lib")
 
 // Using a GUID for the tray icon allows the executable to be moved around or change version
 // without requiring the user to go through the taskbar settings to re-enable the icon.
@@ -96,6 +96,7 @@ typedef struct {
 
 typedef struct {
 	bool enabled;
+	bool autostart;
 	bool use_alternate_keys;
 	float increment;
 } settings_t;
@@ -119,7 +120,7 @@ public:
 // Globals
 wchar_t *APPLICATION_NAME = NULL, *COMPANY_NAME = NULL;	// Needed for registry.h
 static version_t version = { 0 };
-static settings_t settings = { true, false, 0.5f };
+static settings_t settings = { true, false, false, 0.5f };
 static struct tray tray;
 static list<nvDisplay> displayList;
 
@@ -403,6 +404,7 @@ static __inline void ProperMessageBox(wchar_t* icon, const wchar_t* title, const
 	va_end(argp);
 
 	TASKDIALOGCONFIG config = { 0 };
+	config.dwFlags = TDF_SIZE_TO_CONTENT;
 	config.hMainIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON));
 	config.cbSize = sizeof(config);
 	config.pszMainIcon = icon;
@@ -434,8 +436,8 @@ static void AboutCallback(struct tray_menu* item)
 	swprintf_s(szTitle, ARRAYSIZE(szTitle), L"About %s", version.ProductName);
 	swprintf_s(szHeader, ARRAYSIZE(szHeader), L"%s v%d.%d", version.ProductName,
 		version.fixed->dwProductVersionMS >> 16, version.fixed->dwProductVersionMS & 0xffff);
-	const wchar_t* szContent = L"Increase/decrease display brightness using nVidia controls.\nKeyboard shortcuts: Scroll Lock / Pause|Break";
-	swprintf_s(szFooter, ARRAYSIZE(szFooter), L"Licensed under <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\">GPLv3</a>, %s",
+	const wchar_t* szContent = L"Increase/decrease display brightness using nVidia controls.";
+	swprintf_s(szFooter, ARRAYSIZE(szFooter), L"%s, <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\">GPLv3</a>",
 		version.LegalCopyright);
 	swprintf_s(szProject, ARRAYSIZE(szProject), L"Project page\n%s", version.Comments);
 	swprintf_s(szReleaseUrl, ARRAYSIZE(szReleaseUrl), L"%s/releases/latest", version.Comments);
@@ -469,9 +471,15 @@ static void AlternateKeysCallback(struct tray_menu* item)
 {
 	settings.use_alternate_keys = !settings.use_alternate_keys;
 	RegisterHotKeys(settings.use_alternate_keys);
-	logger("Alternate Keys: %s\n", settings.use_alternate_keys ? "Enabled" : "Disabled");
 	item->checked = !item->checked;
 	WriteRegistryKey32(HKEY_CURRENT_USER, L"UseAlternateKeys", item->checked);
+	if (settings.use_alternate_keys) {
+		tray.menu[0].text = L"Brightness +\t［Internet Fwd］ or ［Alt］［→］";
+		tray.menu[1].text = L"Brightness −\t［Internet Back］ or ［Alt］［←］";
+	} else {
+		tray.menu[0].text = L"Brightness +\t［⊞］［Shift］［PgUp］";
+		tray.menu[1].text = L"Brightness −\t［⊞］［Shift］［PgDn］";
+	}
 	tray_update(&tray);
 }
 
@@ -490,6 +498,38 @@ static void PowerOffCallback(struct tray_menu* item)
 {
 	(void)item;
 	SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
+}
+
+static void AutoStartCallback(struct tray_menu* item)
+{
+	wchar_t key_name[128], exe_path[MAX_PATH + 2] = { 0 };
+
+	settings.autostart = !settings.autostart;
+	item->checked = !item->checked;
+	swprintf_s(key_name, ARRAYSIZE(key_name), L"Software\\Microsoft\\Windows\\CurrentVersion\\Run\\%s", version.ProductName);
+	GetModuleFileName(NULL, &exe_path[1], MAX_PATH);
+	// Quote the executable path
+	exe_path[0] = L'"';
+	exe_path[wcslen(exe_path)] = L'"';
+
+	if (settings.autostart) {
+		WriteRegistryKeyStr(HKEY_CURRENT_USER, key_name, exe_path);
+	} else {
+		DeleteRegistryValue(HKEY_CURRENT_USER, key_name);
+	}
+	tray_update(&tray);
+}
+
+static void IncreaseBrightnessCallback(struct tray_menu* item)
+{
+	(void)item;
+	tray_simulate_hottkey(hkIncreaseBrightness);
+}
+
+static void DecreaseBrightnessCallback(struct tray_menu* item)
+{
+	(void)item;
+	tray_simulate_hottkey(hkDecreaseBrightness);
 }
 
 static void ExitCallback(struct tray_menu* item)
@@ -629,16 +669,29 @@ bool PopulateVersionData(void)
 // Main proc
 int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nShowCmd)
 {
-	static wchar_t menu_txt[64];
+	static wchar_t menu_txt[64], mutex_name[64];
 	int ret = 1;
 	int icon_index = 20;
+	wchar_t key_name[128];
 	GUID guid = TRAY_ICON_GUID;
+	HANDLE mutex = NULL;
 
 	SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
 
 	if (!PopulateVersionData()) {
 		ProperMessageBox(TD_ERROR_ICON, L"No version information",
 			L"Version information could not be read from the executable.");
+		goto out;
+	}
+
+	swprintf_s(mutex_name, ARRAYSIZE(mutex_name), L"Global/%s", version.ProductName);
+	// No need to explicitly close/release the mutex
+	// Per https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-createmutexa#remarks:
+	// "The system closes the handle automatically when the process terminates."
+	mutex = CreateMutex(NULL, TRUE, mutex_name);
+	if ((mutex == NULL) || (GetLastError() == ERROR_ALREADY_EXISTS)) {
+		ProperMessageBox(TD_ERROR_ICON, L"Other instance detected",
+			L"An instance of %s is already running.\n", version.ProductName);
 		goto out;
 	}
 
@@ -652,26 +705,34 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		goto out;
 	}
 
+	// Update settings
+	settings.use_alternate_keys = (ReadRegistryKey32(HKEY_CURRENT_USER, L"UseAlternateKeys") != 0);
+	swprintf_s(key_name, ARRAYSIZE(key_name), L"Software\\Microsoft\\Windows\\CurrentVersion\\Run\\%s", version.ProductName);
+	settings.autostart = (ReadRegistryKeyStr(HKEY_CURRENT_USER, key_name)[0] != 0);
+
 	// Build the display list
 	nvDisplay::EnumerateDisplays();
-
 	for (auto& display : displayList)
 		logger("Found display: %s\n", display.GetDisplayString().c_str());
 
 	// Create the tray menu
 	static struct tray_menu menu[] = {
-		{ .text = L"About", .cb = AboutCallback },
-		{ .text = L"Pause", .checked = 0, .cb = PauseCallback },
+		{ .text = L"Brightness +\t［⊞］［Shift］［PgUp］", .cb = IncreaseBrightnessCallback },
+		{ .text = L"Brightness −\t［⊞］［Shift］［PgDn］", .cb = DecreaseBrightnessCallback },
+		{ .text = L"Power off display\t［⊞］［Shift］［End］", .cb = PowerOffCallback },
 		{ .text = L"-" },
-		{ .text = L"Default keys: [Win+Shift+PgUp] / [Win+Shift+PgDn]", .disabled = 1 },
-		{ .text = L"Use Internet navigation keys / [Alt+Arrows]", .checked = 0, .cb = AlternateKeysCallback },
-		{ .text = L"Power off all displays [Win+Shift+End]", .checked = 0, .cb = PowerOffCallback },
+		{ .text = L"Auto Start", .checked = settings.autostart, .cb = AutoStartCallback },
+		{ .text = L"Pause", .checked = 0, .cb = PauseCallback },
+		{ .text = L"Use Internet keys", .checked = settings.use_alternate_keys, .cb = AlternateKeysCallback,  },
+		{ .text = L"About", .cb = AboutCallback },
 		{ .text = L"-" },
 		{ .text = L"Exit", .cb = ExitCallback },
 		{ .text = NULL }
 	};
-	settings.use_alternate_keys = (ReadRegistryKey32(HKEY_CURRENT_USER, L"UseAlternateKeys") != 0);
-	menu[4].checked = settings.use_alternate_keys;
+	if (settings.use_alternate_keys) {
+		menu[0].text = L"Brightness +\t［Internet Fwd］ or ［Alt］［→］";
+		menu[1].text = L"Brightness −\t［Internet Back］ or ［Alt］［←］";
+	}
 
 	if (displayList.size() >= 1)
 		icon_index = GetIconIndex(displayList.front());
@@ -686,8 +747,11 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	}
 
 	// Register the keyboard shortcuts
-	if (!RegisterHotKeys(settings.use_alternate_keys))
-		logger("Could not register hot keys!\n");
+	if (!RegisterHotKeys(settings.use_alternate_keys)) {
+		ProperMessageBox(TD_WARNING_ICON, L"Failed to register keyboard shortcut",
+			L"There was an error registering some of the keyboard shortcuts.\n"
+			"%s is running but some of its shortcuts may not work.\n", version.ProductName);
+	}
 
 	// Process tray application messages
 	while (tray_loop(1) == 0);
@@ -695,8 +759,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	ret = 0;
 
 out:
-	UnRegisterHotKeys();
 	displayList.clear();
+	UnRegisterHotKeys();
 	NvExit();
 	free(version.data);
 #ifdef _DEBUG

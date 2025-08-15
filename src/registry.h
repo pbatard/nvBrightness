@@ -141,6 +141,53 @@ out:
 	return r;
 }
 
+/* Delete a registry value */
+static __inline BOOL DeleteRegistryValue(HKEY key_root, const wchar_t* key_name)
+{
+	wchar_t long_key_name[MAX_PATH] = { 0 };
+	BOOL r = FALSE;
+	HKEY hApp = NULL;
+	LONG s;
+	size_t i;
+
+	if (key_name == NULL || key_root == NULL || COMPANY_NAME == NULL || APPLICATION_NAME == NULL)
+		return FALSE;
+	if (key_root != HKEY_CURRENT_USER)
+		return FALSE;
+
+	for (i = wcslen(key_name); i > 0; i--) {
+		if (key_name[i] == '\\')
+			break;
+	}
+
+	if (i > 0) {
+		if (i >= ARRAYSIZE(long_key_name))
+			return FALSE;
+		wcscpy_s(long_key_name, ARRAYSIZE(long_key_name), key_name);
+		long_key_name[i] = 0;
+		i++;
+		if (RegOpenKeyEx(key_root, long_key_name, 0, KEY_READ | KEY_WRITE, &hApp) != ERROR_SUCCESS) {
+			hApp = NULL;
+			goto out;
+		}
+	} else {
+		wchar_t key_base[128];
+		wsprintf(key_base, L"SOFTWARE\\%s\\%s", COMPANY_NAME, APPLICATION_NAME);
+		if (RegOpenKeyEx(key_root, key_base, 0, KEY_READ | KEY_WRITE, &hApp) != ERROR_SUCCESS) {
+			hApp = NULL;
+			goto out;
+		}
+	}
+
+	s = RegDeleteValue(hApp, &key_name[i]);
+	r = ((s == ERROR_SUCCESS) || (s == ERROR_FILE_NOT_FOUND));
+
+out:
+	if (hApp != NULL)
+		RegCloseKey(hApp);
+	return r;
+}
+
 /* Helpers for 64 bit registry operations */
 #define GetRegistryKey64(root, key, pval) _GetRegistryKey(root, key, REG_QWORD, (LPBYTE)pval, sizeof(LONGLONG))
 #define SetRegistryKey64(root, key, val) _SetRegistryKey(root, key, REG_QWORD, (LPBYTE)&val, sizeof(LONGLONG))
@@ -183,12 +230,13 @@ static __inline BOOL WriteRegistryKey32(HKEY root, const wchar_t* key, int32_t v
 
 /* Helpers for String registry operations */
 #define GetRegistryKeyStr(root, key, str, len) _GetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)len)
-#define SetRegistryKeyStr(root, key, str) _SetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)wcslen(str))
+#define SetRegistryKeyStr(root, key, str) _SetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)wcslen(str) * sizeof(WCHAR))
 // Use a static buffer - don't allocate
 static __inline wchar_t* ReadRegistryKeyStr(HKEY root, const wchar_t* key) {
 	static wchar_t str[512];
 	str[0] = 0;
-	_GetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)ARRAYSIZE(str)-1);
+	_GetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)(sizeof(str) - sizeof(WCHAR)));
+	str[ARRAYSIZE(str) - 1] = 0;
 	return str;
 }
 #define WriteRegistryKeyStr SetRegistryKeyStr
