@@ -33,16 +33,36 @@
 #include <stdlib.h>
 #include <math.h>
 #include <commctrl.h>
+#include <initguid.h>
+#include <ntddvdeo.h>
+#include <powerbase.h>
+#include <powrprof.h>
 #include <shellscalingapi.h>
+#include <lowlevelmonitorconfigurationapi.h>
+#include <physicalmonitorenumerationapi.h>
 
 #include <string>
 #include <iostream>
+#include <iomanip>
 #include <format>
+#include <thread>
 #include <list>
+#include <regex>
+#include <sstream>
+#include <vector>
+#include <chrono>
+
 using std::string;
 using std::wstring;
 using std::list;
 using std::format;
+using std::thread;
+using std::smatch;
+using std::regex;
+using std::vector;
+using std::istringstream;
+using std::chrono::steady_clock;
+using std::chrono::seconds;
 
 #include "resource.h"
 #include "tray.h"
@@ -51,12 +71,34 @@ using std::format;
 #include "DarkTaskDialog.hpp"
 
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "dxva2.lib")
+#pragma comment(lib, "powrprof.lib")
 #pragma comment(lib, "shcore.lib")
 #pragma comment(lib, "version.lib")
 
 // Using a GUID for the tray icon allows the executable to be moved around or change version
 // without requiring the user to go through the taskbar settings to re-enable the icon.
+#ifdef _DEBUG
+// Note that we use two GUIDs due to a Microsoft UTTERLY MADDENING BUG, where Windows silently
+// drops the tray icon, for some arcane reason that I really am NOT ready to waste DAYS on.
+// And it only happens to some versions of the executable, independently of their location and
+// REGARDLESS OF WHETHER THEY WERE RECOMPILED FROM THE SAME SOURCE AS UNAFFECTED EXECUTABLES!!!
+// So, Microsoft, you can go screw yourselves on that one, as I have better things to do than
+// chase after a stupid Windows bug/limitation/whatever.
+#define TRAY_ICON_GUID { 0x64397973, 0xa694, 0x4640, { 0x80, 0x26, 0x96, 0x04, 0x46, 0x75, 0x00, 0x2c } }
+#else
 #define TRAY_ICON_GUID { 0x64397973, 0xa694, 0x4640, { 0x80, 0x26, 0x96, 0x04, 0x46, 0x75, 0x00, 0x2b } }
+#endif
+
+// VCP control code to read/switch a monitor's input source
+#define VCP_INPUT_SOURCE            0x60
+
+// Custom VCP input values for previous/next
+#define VCP_INPUT_PREVIOUS          0xfe
+#define VCP_INPUT_NEXT              0xff
+
+// How long we may retry GetCapabilitiesStringLength(), in seconds
+#define VCP_CAPS_MAX_RETRY_TIME     300
 
 // nVidia Color data definitions
 #define NV_COLOR_REGISTRY_INDEX     3538946
@@ -81,6 +123,10 @@ enum {
 	hkDecreaseBrightness2,
 	hkIncreaseBrightness2,
 	hkPowerOffMonitor,
+	hkRestoreInput,
+	hkPreviousInput,
+	hkNextInput,
+	hkRegisterHotkeys,
 	hkMax
 };
 
@@ -98,18 +144,42 @@ typedef struct {
 	bool enabled;
 	bool autostart;
 	bool use_alternate_keys;
+	bool resume_to_last_input;
 	float increment;
 } settings_t;
 
 // Classes
+class nvMonitor {
+	HMONITOR hMonitor = NULL;
+	wchar_t displayName[sizeof(NvAPI_ShortString)] = { 0 };
+	wchar_t deviceID[128] = { 0 };
+	vector<PHYSICAL_MONITOR> physicalMonitors;
+	vector<uint8_t> allowedInputs;
+	uint8_t lastKnownInput = 0;
+	string modelName = "Unknown";
+	thread worker;
+public:
+	~nvMonitor();
+	void InitializeMonitor(uint32_t displayId);
+	uint8_t GetMonitorLastKnownInput() const { return lastKnownInput; };
+	uint8_t GetMonitorInput();
+	void SaveMonitorInput() { lastKnownInput = GetMonitorInput(); };
+	uint8_t SetMonitorInput(uint8_t);
+	PHYSICAL_MONITOR* GetFirstPhysicalMonitor() { return (physicalMonitors.size() == 0) ? NULL : &physicalMonitors[0]; };
+	void GetMonitorAllowedInputs();
+};
+
 class nvDisplay {
 	uint32_t displayId;
 	wstring registryKeyString;
 	float colorSetting[nvAttrMax][nvColorMax];
-	string displayString;
+	nvMonitor monitor;
 public:
 	nvDisplay(uint32_t);
-	string GetDisplayString();
+	uint8_t GetMonitorLastKnownInput() { return monitor.GetMonitorLastKnownInput(); };
+	uint8_t GetMonitorInput() { return monitor.GetMonitorInput(); };
+	void SaveMonitorInput() { monitor.SaveMonitorInput(); };
+	uint8_t SetMonitorInput(uint8_t input) { return monitor.SetMonitorInput(input); };
 	bool UpdateGamma();
 	void ChangeBrightness(float delta);
 	float GetBrightness();
@@ -120,14 +190,15 @@ public:
 // Globals
 wchar_t *APPLICATION_NAME = NULL, *COMPANY_NAME = NULL;	// Needed for registry.h
 static version_t version = { 0 };
-static settings_t settings = { true, false, false, 0.5f };
-static struct tray tray;
+static settings_t settings = { true, false, false, false, 0.5f };
+static struct tray tray = { 0 };
 static list<nvDisplay> displayList;
+static bool input_switching_supported = false, cancel_thread = false;
 
 // Logging
 static void logger(const char* format, ...)
 {
-	char log_msg[256];
+	static char log_msg[512];
 
 	va_list argp;
 	va_start(argp, format);
@@ -153,35 +224,56 @@ static bool IsDarkModeEnabled(void)
 	return false;
 }
 
-static string GetMonitorString(NvU32 displayId)
+// Using a C++ map would be nice and all, *if* C++ had maps
+// that return a default value when a key is not found...
+static const char* InputToString(uint8_t input)
 {
-	NvAPI_Status r;
-	NvDisplayHandle displayHandle;
-	NvAPI_ShortString displayName;
-	DISPLAY_DEVICEA displayDevice, monitorDevice;
-	displayDevice.cb = sizeof(DISPLAY_DEVICEA);
+	switch (input) {
+	case 0x01: return "VGA 1";
+	case 0x02: return "VGA 2";
+	case 0x03: return "DVI 1";
+	case 0x04: return "DVI 2";
+	case 0x05: return "Composite 1";
+	case 0x06: return "Composite 2";
+	case 0x07: return "S-Video 1";
+	case 0x08: return "S-Video 2";
+	case 0x09: return "Tuner 1";
+	case 0x0a: return "Tuner 2";
+	case 0x0b: return "Tuner 3";
+	case 0x0c: return "Component 1";
+	case 0x0d: return "Component 2";
+	case 0x0e: return "Component 3";
+	case 0x0f: return "DP 1";
+	case 0x10: return "DP 2";
+	case 0x11: return "HDMI 1";
+	case 0x12: return "HDMI 2";
+	// Yeah, someone, SOMEWHERE, has this info, but they are hoarding
+	// it to themselves. So have fun dealing with an educated guess,
+	// that's going to pollute the internet forever as it becomes the
+	// prime reference.
+	// That'll teach you NOT to disclose what SHOULD be public data!
+	case 0x13: return "HDMI 3";
+	case 0x14: return "HDMI 4";
+	case 0x15: return "Thunderbolt 1";
+	case 0x16: return "Thunderbolt 2";
+	case 0x17: return "USB-C 1";
+	case 0x18: return "USB-C 2";
+	case 0x19: return "HDMI over USB-C 1";
+	case 0x1a: return "HDMI over USB-C 2";
+	case 0x1b: return "DP over USB-C 1";
+	case 0x1c: return "DP over USB-C 2";
+	default: return "Unknown";
+	}
+};
 
-	r = NvAPI_DISP_GetDisplayHandleFromDisplayId(displayId, &displayHandle);
-	if (r != NVAPI_OK) {
-		logger("NvAPI_DISP_GetDisplayHandleFromDisplayId(0x%08x): %d %s\n", displayId, r, NvErrStr(r));
-		return "";
-	}
-	r = NvAPI_GetAssociatedNvidiaDisplayName(displayHandle, displayName);
-	if (r != NVAPI_OK) {
-		logger("NvAPI_GetAssociatedNvidiaDisplayName(0x%08x): %d %s\n", displayId, r, NvErrStr(r));
-		return "";
-	}
-
-	for (auto i = 0; EnumDisplayDevicesA(NULL, i, &displayDevice, 0); i++) {
-		if (_stricmp(displayDevice.DeviceName, displayName) != 0)
-			continue;
-		monitorDevice.cb = sizeof(DISPLAY_DEVICEA);
-		for (auto j = 0; EnumDisplayDevicesA(displayDevice.DeviceName, j, &monitorDevice, 0); ++j) {
-			if (monitorDevice.StateFlags & DISPLAY_DEVICE_ACTIVE)
-				return monitorDevice.DeviceString;
-		}
-	}
-	return "";
+static vector<string> SplitByWhitespace(const string& s)
+{
+	istringstream iss(s);
+	vector<string> tokens;
+	string token;
+	while (iss >> token)
+		tokens.push_back(token);
+	return tokens;
 }
 
 static int GetIconIndex(nvDisplay& display)
@@ -223,25 +315,269 @@ static void UnRegisterHotKeys(void)
 		tray_unregister_hotkkey(hk);
 }
 
-static bool RegisterHotKeys(bool alt_mode)
+static bool RegisterHotKeys(void)
 {
 	UnRegisterHotKeys();
-	bool b = tray_register_hotkey(hkPowerOffMonitor, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_END);
+	bool b = true;
+	b &= tray_register_hotkey(hkPowerOffMonitor, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_END);
+	b &= tray_register_hotkey(hkRestoreInput, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_HOME);
+	if (input_switching_supported) {
+		b &= tray_register_hotkey(hkNextInput, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_OEM_PERIOD);
+		b &= tray_register_hotkey(hkPreviousInput, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_OEM_COMMA);
+	}
 
-	if (alt_mode) {
+	if (settings.use_alternate_keys) {
 		// Allegedly, per https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey#remarks
 		// "If a hot key already exists with the same hWnd and id parameters, it is maintained along with the new hot key"
 		// so, we should be able to register VK_BROWSER_FORWARD and Alt → with the same ID.
 		// In practice however, THIS DOES NOT WORK for some combinations, and it causes the hotkeys to be ignored.
 		// So we have to use different IDs even if we want to map 2 keys to the same action...
-		return (b && tray_register_hotkey(hkIncreaseBrightness, MOD_ALT, VK_RIGHT) &&
-			tray_register_hotkey(hkDecreaseBrightness, MOD_ALT, VK_LEFT) &&
-			tray_register_hotkey(hkIncreaseBrightness2, 0, VK_BROWSER_FORWARD) &&
-			tray_register_hotkey(hkDecreaseBrightness2, 0, VK_BROWSER_BACK));
+		b &= tray_register_hotkey(hkIncreaseBrightness, MOD_ALT, VK_RIGHT);
+		b &= tray_register_hotkey(hkDecreaseBrightness, MOD_ALT, VK_LEFT);
+		b &= tray_register_hotkey(hkIncreaseBrightness2, 0, VK_BROWSER_FORWARD);
+		b &= tray_register_hotkey(hkDecreaseBrightness2, 0, VK_BROWSER_BACK);
 	} else {
-		return (b && tray_register_hotkey(hkIncreaseBrightness, MOD_WIN | MOD_SHIFT, VK_PRIOR) &&
-			tray_register_hotkey(hkDecreaseBrightness, MOD_WIN | MOD_SHIFT, VK_NEXT));
+		b &= tray_register_hotkey(hkIncreaseBrightness, MOD_WIN | MOD_SHIFT, VK_PRIOR);
+		b &= tray_register_hotkey(hkDecreaseBrightness, MOD_WIN | MOD_SHIFT, VK_NEXT);
 	}
+	return b;
+}
+
+// nvMonitor methods
+
+// Ideally, this would be the constructor method, but because C++ is dumb when it comes to
+// passing the correct instance of an object, when starting a thread from the constructor
+// of an object that isn't the default constructor, we have to use a different method.
+void nvMonitor::InitializeMonitor(uint32_t displayId)
+{
+	NvAPI_Status r;
+	NvAPI_ShortString nvDisplayName;
+	NvDisplayHandle displayHandle;
+	DWORD numPhysicalMonitors;
+	DISPLAY_DEVICE displayDevice{ .cb = sizeof(DISPLAY_DEVICE) }, monitorDevice{ .cb = sizeof(DISPLAY_DEVICE) };
+
+	// Finish initializing our instance
+	hMonitor = NULL;
+	lastKnownInput = 0;
+	memset(displayName, 0, sizeof(displayName));
+	memset(deviceID, 0, sizeof(deviceID));
+
+	// Get the Windows display name
+	r = NvAPI_DISP_GetDisplayHandleFromDisplayId(displayId, &displayHandle);
+	if (r != NVAPI_OK) {
+		logger("NvAPI_DISP_GetDisplayHandleFromDisplayId(0x%08x): %d %s\n", displayId, r, NvErrStr(r));
+		return;
+	}
+	r = NvAPI_GetAssociatedNvidiaDisplayName(displayHandle, nvDisplayName);
+	if (r != NVAPI_OK) {
+		logger("NvAPI_GetAssociatedNvidiaDisplayName(0x%08x): %d %s\n", displayId, r, NvErrStr(r));
+		return;
+	}
+
+	for (auto i = 0; i < sizeof(nvDisplayName); i++)
+		displayName[i] = nvDisplayName[i];
+
+	// Get the physical HMONITOR handle associated with the display
+	for (auto i = 0; EnumDisplayDevices(NULL, i, &displayDevice, 0); i++) {
+		if (_wcsicmp(displayDevice.DeviceName, displayName) != 0)
+			continue;
+		for (auto j = 0; EnumDisplayDevices(displayName, j, &monitorDevice, EDD_GET_DEVICE_INTERFACE_NAME); ++j) {
+			if (monitorDevice.StateFlags & DISPLAY_DEVICE_ACTIVE) {
+				DEVMODE devMode{ .dmSize = sizeof(devMode) };
+				if (EnumDisplaySettings(displayName, ENUM_CURRENT_SETTINGS, &devMode) != FALSE) {
+					// https://stackoverflow.com/a/38380281/1069307
+					BOOL b = EnumDisplayMonitors(NULL, NULL,
+						[](HMONITOR hMonitor, HDC hDC, LPRECT rc, LPARAM data) -> BOOL {
+							auto& monitorData = *reinterpret_cast<nvMonitor*>(data);
+							MONITORINFOEX monitorInfo;
+							monitorInfo.cbSize = sizeof(monitorInfo);
+							if (GetMonitorInfo(hMonitor, &monitorInfo) &&
+								_wcsicmp(monitorInfo.szDevice, monitorData.displayName) == 0) {
+								monitorData.hMonitor = hMonitor;
+								return TRUE;
+							}
+							return FALSE;
+						},
+						reinterpret_cast<LPARAM>(this));
+					if (b && hMonitor != NULL) {
+						wcscpy_s(deviceID, ARRAYSIZE(deviceID), monitorDevice.DeviceID);
+						goto have_physical_handle;
+					}
+				}
+			}
+		}
+	}
+	return;
+
+have_physical_handle:
+	// With the physical monitor handle, we can look at its VCP features
+	if (!GetNumberOfPhysicalMonitorsFromHMONITOR(hMonitor, &numPhysicalMonitors))
+		return;
+
+	physicalMonitors.resize(numPhysicalMonitors);
+
+	if (!GetPhysicalMonitorsFromHMONITOR(hMonitor, numPhysicalMonitors, physicalMonitors.data()))
+		physicalMonitors.resize(0);
+
+	auto physicalMonitor = GetFirstPhysicalMonitor();
+	if (physicalMonitor != NULL) {
+		DWORD i, input = 0, max = 0;
+		for (i = 0; i < 10 && !GetVCPFeatureAndVCPFeatureReply(physicalMonitor->hPhysicalMonitor, VCP_INPUT_SOURCE, NULL, &input, &max); i++)
+			Sleep(100);
+		if (i == 10)
+			logger("Could not retrieve monitor input: error 0x%X\n", GetLastError());
+		lastKnownInput = (uint8_t)input;
+		if (lastKnownInput != 0x00) {
+			// If we didn't get the current input, the monitor is unlikely to honour VCP
+			logger("Current monitor input: %s\n", InputToString(lastKnownInput));
+			worker = thread(&nvMonitor::GetMonitorAllowedInputs, this);
+			worker.detach();
+		}
+	} else {
+		lastKnownInput = 0;
+	}
+}
+
+nvMonitor::~nvMonitor()
+{
+	if (worker.joinable())
+		worker.join();
+	DestroyPhysicalMonitors((DWORD)physicalMonitors.size(), physicalMonitors.data());
+}
+
+// Issuing CapabilitiesRequestAndCapabilitiesReply() can be a lengthy process and may need
+// to be reiterated multiple times before we get a valid answer. So use a thread.
+void nvMonitor::GetMonitorAllowedInputs()
+{
+	char* szCapabilitiesString = NULL;
+	DWORD i = 1, size = 0;
+
+	auto physicalMonitor = GetFirstPhysicalMonitor();
+	if (physicalMonitor == NULL)
+		return;
+
+	// GetCapabilitiesStringLength() is *VERY* temperamental, so we retry up to VCP_CAPS_MAX_RETRY_TIME
+	steady_clock::time_point begin = steady_clock::now();
+	for (i = 1; !GetCapabilitiesStringLength(physicalMonitor->hPhysicalMonitor, &size); i++) {
+		if (cancel_thread)
+			return;
+		auto elapsed = std::chrono::duration_cast<seconds>(steady_clock::now() - begin);
+		if (elapsed.count() > VCP_CAPS_MAX_RETRY_TIME) {
+			logger("failed to get VCP capabilities after %d attempts: %x\n", i, GetLastError());
+			return;
+		}
+	}
+
+	// If GetCapabilitiesStringLength() succeeded then the subsequent call to
+	// CapabilitiesRequestAndCapabilitiesReply() usually doesn't fail, so no need for retries there.
+	szCapabilitiesString = (char*)malloc(size);
+	if (szCapabilitiesString == NULL)
+		goto out;
+
+	if (CapabilitiesRequestAndCapabilitiesReply(physicalMonitor->hPhysicalMonitor, szCapabilitiesString, size)) {
+		string capabilities = szCapabilitiesString;
+		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(steady_clock::now() - begin);
+		logger("Retrieved monitor VCP capabilities in %u.%03u seconds (%d %s)\n",
+			(unsigned)(elapsed.count() / 1000), (unsigned)(elapsed.count() % 1000), i, (i == 1) ? "try" : "tries");
+
+		// Get the model name while we're here
+		regex modelRegex(R"(model\(([^)]+)\))");
+		smatch match;
+		if (regex_search(capabilities, match, modelRegex))
+			modelName = match[1];
+
+		// Get the allowed inputs for VCP code 0x60
+		regex inputsRegex(R"(60\(([^)]*)\))");
+		if (regex_search(capabilities, match, inputsRegex)) {
+			string inner = match[1];
+			auto tokens = SplitByWhitespace(inner);
+			for (auto& t : tokens) {
+				try {
+					allowedInputs.push_back((uint8_t)stoi(t, nullptr, 16));
+				}
+				catch (...) {
+					logger("Invalid monitor input value found in %s\n", inner.c_str());
+				}
+			}
+		}
+		// No points in adding input switching if there's only one
+		if (!input_switching_supported && allowedInputs.size() > 1) {
+			// Wait for the menu to have been created if that's not the case
+			tray.menu[4].disabled = false;
+			tray.menu[5].disabled = false;
+			tray_update(&tray);
+			input_switching_supported = true;
+			// So, the problem with Windows hot keys is that they are registered for a specific
+			// thread rather than globally. Which means that if we just call RegisterHotKeys()
+			// from this thread, we are going to have an issue.
+			// Long story short, we simulate a fake hotkey press, to re-register the hotkeys.
+			tray_simulate_hottkey(hkRegisterHotkeys);
+		}
+
+		string separator, inputs;
+		for (const auto& input : allowedInputs) {
+			inputs += separator + InputToString(input);
+			separator = ", ";
+		}
+		logger("%s valid input(s): %s\n", modelName.c_str(), inputs.c_str());
+	} else {
+		logger("Could not get monitor VCP capabilities: %x\n", GetLastError());
+	}
+
+out:
+	free(szCapabilitiesString);
+}
+
+uint8_t nvMonitor::GetMonitorInput()
+{
+	DWORD i, current = 0, max = 0;
+	auto physicalMonitor = GetFirstPhysicalMonitor();
+	if (physicalMonitor == NULL)
+		return 0;
+
+	// Read the current input (with a few retries)
+	for (i = 0; i < 10 && !GetVCPFeatureAndVCPFeatureReply(physicalMonitor->hPhysicalMonitor, VCP_INPUT_SOURCE, NULL, &current, &max); i++)
+		Sleep(100);
+	if (i == 10 || (uint8_t)lastKnownInput == 0) {
+		logger("Could not get current input: error %X\n", GetLastError());
+		return 0;
+	}
+	return (uint8_t)current;
+}
+
+uint8_t nvMonitor::SetMonitorInput(uint8_t requested)
+{
+	uint8_t ret = 0, current = GetMonitorInput();
+
+	auto physicalMonitor = GetFirstPhysicalMonitor();
+	if (physicalMonitor == NULL)
+		return 0;
+
+	// If input is 0, reselect the last known input
+	if (requested == 0)
+		requested = lastKnownInput;
+	if (current == 0 || requested == 0)
+		return 0;
+
+	if (requested == VCP_INPUT_NEXT || requested == VCP_INPUT_PREVIOUS) {
+		auto pos = lower_bound(allowedInputs.begin(), allowedInputs.end(), current) - allowedInputs.begin();
+		pos += allowedInputs.size();	// Prevent an underflow when subtracting -1 from 0
+		pos = (pos + ((requested == VCP_INPUT_NEXT) ? +1 : -1)) % allowedInputs.size();
+		requested = allowedInputs.at(pos);
+	}
+
+	if (current == requested) {
+		logger("Current monitor input is the same as requested - not switching inputs\n");
+		ret = requested;
+	} else {
+		if (!SetVCPFeature(physicalMonitor->hPhysicalMonitor, VCP_INPUT_SOURCE, requested))
+			logger("Could not set input: error %X\n", GetLastError());
+		else
+			ret = requested;
+	}
+	lastKnownInput = ret;
+
+	return ret;
 }
 
 // nvDisplay methods
@@ -251,7 +587,7 @@ nvDisplay::nvDisplay(uint32_t displayId)
 	NvAPI_Status r;
 
 	this->displayId = displayId;
-	this->displayString = GetMonitorString(displayId);
+	monitor.InitializeMonitor(displayId);
 
 	r = NvAPI_SYS_GetLUIDFromDisplayID(displayId, 1, &guid);
 	if (r != NVAPI_OK) {
@@ -272,11 +608,6 @@ nvDisplay::nvDisplay(uint32_t displayId)
 				this->colorSetting[i / 3][i % 3] = 100.0f;
 		}
 	}
-}
-
-string nvDisplay::GetDisplayString()
-{
-	return this->displayString;
 }
 
 float nvDisplay::GetBrightness()
@@ -378,7 +709,7 @@ size_t nvDisplay::EnumerateDisplays()
 			logger("NvAPI_GPU_GetConnectedDisplayIds[%d]: %d %s\n", i, r, NvErrStr(r));
 		} else {
 			for (NvU32 j = 0; j < displayCount; j++)
-				displayList.emplace_back(displayIds[j].displayId); // new nvDisplay(displayIds[j].displayId));
+				displayList.emplace_back(displayIds[j].displayId);
 		}
 		free(displayIds);
 	}
@@ -470,7 +801,7 @@ static void AboutCallback(struct tray_menu* item)
 static void AlternateKeysCallback(struct tray_menu* item)
 {
 	settings.use_alternate_keys = !settings.use_alternate_keys;
-	RegisterHotKeys(settings.use_alternate_keys);
+	RegisterHotKeys();
 	item->checked = !item->checked;
 	WriteRegistryKey32(HKEY_CURRENT_USER, L"UseAlternateKeys", item->checked);
 	if (settings.use_alternate_keys) {
@@ -488,7 +819,7 @@ static void PauseCallback(struct tray_menu* item)
 	settings.enabled = !settings.enabled;
 	item->checked = !item->checked;
 	if (settings.enabled)
-		RegisterHotKeys(settings.use_alternate_keys);
+		RegisterHotKeys();
 	else
 		UnRegisterHotKeys();
 	tray_update(&tray);
@@ -498,6 +829,20 @@ static void PowerOffCallback(struct tray_menu* item)
 {
 	(void)item;
 	SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
+}
+
+static void RestoreInputCallback(struct tray_menu* item)
+{
+	(void)item;
+	tray_simulate_hottkey(hkRestoreInput);
+}
+
+static void ResumeToLastInputCallback(struct tray_menu* item)
+{
+	settings.resume_to_last_input = !settings.resume_to_last_input;
+	item->checked = !item->checked;
+	WriteRegistryKey32(HKEY_CURRENT_USER, L"ResumeToLastInput", item->checked);
+	tray_update(&tray);
 }
 
 static void AutoStartCallback(struct tray_menu* item)
@@ -542,6 +887,7 @@ static void ExitCallback(struct tray_menu* item)
 static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
 {
 	float delta = 0.0f;
+	uint8_t input = 0;
 
 	if (wparam < 0 || wparam >= hkMax)
 		return false;
@@ -567,12 +913,51 @@ static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
 	case hkPowerOffMonitor:
 		SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
 		break;
+	case hkRestoreInput:
+		// Apply to all displays
+		for (auto& display : displayList)
+			display.SetMonitorInput(0);
+		break;
+	case hkNextInput:
+	case hkPreviousInput:
+		// Only apply to first display
+		input = displayList.front().SetMonitorInput((wparam == hkNextInput) ? VCP_INPUT_NEXT : VCP_INPUT_PREVIOUS);
+		logger("Switched to input: %s\n", InputToString(input));
+		break;
+	case hkRegisterHotkeys:
+		RegisterHotKeys();
+		break;
 	default:
 		logger("Unhandled Hot Key!\n");
 		break;
 	}
 
 	return true;
+}
+
+// Callback for power events
+static ULONG CALLBACK PowerEventCallback(PVOID Context, ULONG Type, PVOID Setting)
+{
+	if (!settings.enabled || !settings.resume_to_last_input)
+		return 0;
+
+	switch (Type) {
+	case PBT_APMSUSPEND:
+	case PBT_APMSTANDBY:
+		logger("Suspending system - saving monitor inputs\n");
+		// User may have switched inputs manually so save the current one
+		for (auto& display : displayList)
+			display.SaveMonitorInput();
+		break;
+	case PBT_APMRESUMESUSPEND:
+		logger("Resume from suspend - restoring monitor inputs\n");
+		for (auto& display : displayList)
+			display.SetMonitorInput(0);
+		break;
+	default:
+		break;
+	}
+	return 0;
 }
 
 // nVidia API Procs
@@ -669,12 +1054,12 @@ bool PopulateVersionData(void)
 // Main proc
 int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nShowCmd)
 {
-	static wchar_t menu_txt[64], mutex_name[64];
-	int ret = 1;
-	int icon_index = 20;
+	static wchar_t mutex_name[64];
+	int ret = 1, icon_index = 20;
 	wchar_t key_name[128];
 	GUID guid = TRAY_ICON_GUID;
-	HANDLE mutex = NULL;
+	HANDLE mutex = NULL, power_handle = NULL;
+	DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS power_params;
 
 	SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
 
@@ -707,23 +1092,28 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 
 	// Update settings
 	settings.use_alternate_keys = (ReadRegistryKey32(HKEY_CURRENT_USER, L"UseAlternateKeys") != 0);
+	settings.resume_to_last_input = (ReadRegistryKey32(HKEY_CURRENT_USER, L"ResumeToLastInput") != 0);
 	swprintf_s(key_name, ARRAYSIZE(key_name), L"Software\\Microsoft\\Windows\\CurrentVersion\\Run\\%s", version.ProductName);
 	settings.autostart = (ReadRegistryKeyStr(HKEY_CURRENT_USER, key_name)[0] != 0);
 
 	// Build the display list
 	nvDisplay::EnumerateDisplays();
-	for (auto& display : displayList)
-		logger("Found display: %s\n", display.GetDisplayString().c_str());
 
 	// Create the tray menu
 	static struct tray_menu menu[] = {
 		{ .text = L"Brightness +\t［⊞］［Shift］［PgUp］", .cb = IncreaseBrightnessCallback },
 		{ .text = L"Brightness −\t［⊞］［Shift］［PgDn］", .cb = DecreaseBrightnessCallback },
 		{ .text = L"Power off display\t［⊞］［Shift］［End］", .cb = PowerOffCallback },
+		{ .text = L"Reselect monitor input\t［⊞］［Shift］［Home］", .disabled = (displayList.front().GetMonitorLastKnownInput() == 0),
+			.cb = RestoreInputCallback },
+		{ .text = L"Next monitor input\t［⊞］［Shift］［.］", .disabled = true, },
+		{ .text = L"Previous monitor input\t［⊞］［Shift］［,］", .disabled = true },
 		{ .text = L"-" },
 		{ .text = L"Auto Start", .checked = settings.autostart, .cb = AutoStartCallback },
 		{ .text = L"Pause", .checked = 0, .cb = PauseCallback },
-		{ .text = L"Use Internet keys", .checked = settings.use_alternate_keys, .cb = AlternateKeysCallback,  },
+		{ .text = L"Use Internet keys", .checked = settings.use_alternate_keys, .cb = AlternateKeysCallback, },
+		{ .text = L"Reselect input after sleep", .disabled = (displayList.front().GetMonitorLastKnownInput() == 0),
+			.checked = settings.resume_to_last_input, .cb = ResumeToLastInputCallback },
 		{ .text = L"About", .cb = AboutCallback },
 		{ .text = L"-" },
 		{ .text = L"Exit", .cb = ExitCallback },
@@ -747,11 +1137,16 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	}
 
 	// Register the keyboard shortcuts
-	if (!RegisterHotKeys(settings.use_alternate_keys)) {
+	if (!RegisterHotKeys()) {
 		ProperMessageBox(TD_WARNING_ICON, L"Failed to register keyboard shortcut",
 			L"There was an error registering some of the keyboard shortcuts.\n"
 			"%s is running but some of its shortcuts may not work.\n", version.ProductName);
 	}
+
+	// Register a callback for resume from sleep
+	power_params.Callback = PowerEventCallback;
+	power_params.Context = NULL;
+	PowerRegisterSuspendResumeNotification(DEVICE_NOTIFY_CALLBACK, &power_params, &power_handle);
 
 	// Process tray application messages
 	while (tray_loop(1) == 0);
@@ -759,8 +1154,10 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	ret = 0;
 
 out:
-	displayList.clear();
+	cancel_thread = true;
+	PowerUnregisterSuspendResumeNotification(power_handle);
 	UnRegisterHotKeys();
+	displayList.clear();
 	NvExit();
 	free(version.data);
 #ifdef _DEBUG

@@ -260,6 +260,7 @@
     <Image Include="..\icons\85.ico" />
     <Image Include="..\icons\90.ico" />
     <Image Include="..\icons\95.ico" />
+    <Image Include="..\icons\app.ico" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="detours.vcxproj">
