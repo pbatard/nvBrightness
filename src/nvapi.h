@@ -112,18 +112,31 @@ typedef int (NVAPI_API_CALL* NVAPI_SYS_GETLUIDFROMDISPLAYID) (NvU32, NvU32, GUID
 typedef int (NVAPI_API_CALL *NVAPI_GETASSOCIATEDNVIDIADISPLAYNAME) (NvDisplayHandle, NvAPI_ShortString);
 typedef void (*NvAPI_Logger)(const char*, ...);
 
-// The following works as long as the header is only ever used once
-static HINSTANCE NvAPI_Library = NULL;
-static NVAPI_QUERYINTERFACE nvapi_QueryInterface = NULL;
-static NVAPI_INITIALIZE NvAPI_Initialize = NULL;
-static NVAPI_UNLOAD NvAPI_Unload = NULL;
-static NVAPI_GETERRORMESSAGE NvAPI_GetErrorMessage = NULL;
-static NVAPI_ENUMPHYSICALGPUS NvAPI_EnumPhysicalGPUs = NULL;
-static NVAPI_GPU_GETCONNECTEDDISPLAYIDS NvAPI_GPU_GetConnectedDisplayIds = NULL;
-static NVAPI_DISP_SETTARGETGAMMACORRECTION NvAPI_DISP_SetTargetGammaCorrection = NULL;
-static NVAPI_SYS_GETLUIDFROMDISPLAYID NvAPI_SYS_GetLUIDFromDisplayID = NULL;
-static NVAPI_DISP_GETDISPLAYHANDLEFROMDISPLAYID NvAPI_DISP_GetDisplayHandleFromDisplayId = NULL;
-static NVAPI_GETASSOCIATEDNVIDIADISPLAYNAME NvAPI_GetAssociatedNvidiaDisplayName = NULL;
+extern HINSTANCE NvAPI_Library;
+extern NVAPI_QUERYINTERFACE nvapi_QueryInterface;
+extern NVAPI_INITIALIZE NvAPI_Initialize;
+extern NVAPI_UNLOAD NvAPI_Unload;
+extern NVAPI_GETERRORMESSAGE NvAPI_GetErrorMessage;
+extern NVAPI_ENUMPHYSICALGPUS NvAPI_EnumPhysicalGPUs;
+extern NVAPI_GPU_GETCONNECTEDDISPLAYIDS NvAPI_GPU_GetConnectedDisplayIds;
+extern NVAPI_DISP_SETTARGETGAMMACORRECTION NvAPI_DISP_SetTargetGammaCorrection;
+extern NVAPI_SYS_GETLUIDFROMDISPLAYID NvAPI_SYS_GetLUIDFromDisplayID;
+extern NVAPI_DISP_GETDISPLAYHANDLEFROMDISPLAYID NvAPI_DISP_GetDisplayHandleFromDisplayId;
+extern NVAPI_GETASSOCIATEDNVIDIADISPLAYNAME NvAPI_GetAssociatedNvidiaDisplayName;
+
+// Use GLOBAL_NVAPI_INSTANCE *once* in one of the C/C++ sources
+#define GLOBAL_NVAPI_INSTANCE                                                               \
+HINSTANCE NvAPI_Library = NULL;                                                             \
+NVAPI_QUERYINTERFACE nvapi_QueryInterface = NULL;                                           \
+NVAPI_INITIALIZE NvAPI_Initialize = NULL;                                                   \
+NVAPI_UNLOAD NvAPI_Unload = NULL;                                                           \
+NVAPI_GETERRORMESSAGE NvAPI_GetErrorMessage = NULL;                                         \
+NVAPI_ENUMPHYSICALGPUS NvAPI_EnumPhysicalGPUs = NULL;                                       \
+NVAPI_GPU_GETCONNECTEDDISPLAYIDS NvAPI_GPU_GetConnectedDisplayIds = NULL;                   \
+NVAPI_DISP_SETTARGETGAMMACORRECTION NvAPI_DISP_SetTargetGammaCorrection = NULL;             \
+NVAPI_SYS_GETLUIDFROMDISPLAYID NvAPI_SYS_GetLUIDFromDisplayID = NULL;                       \
+NVAPI_DISP_GETDISPLAYHANDLEFROMDISPLAYID NvAPI_DISP_GetDisplayHandleFromDisplayId = NULL;   \
+NVAPI_GETASSOCIATEDNVIDIADISPLAYNAME NvAPI_GetAssociatedNvidiaDisplayName = NULL;
 
 #define NV_LOAD_FUNC(name, type, libname, logger) \
   name = (type) GetProcAddress(NvAPI_Library, #name); \
@@ -174,6 +187,13 @@ static inline void NvAPI_Exit(void)
 		NvAPI_Unload();
 	if (NvAPI_Library != NULL)
 		FreeLibrary(NvAPI_Library);
+}
+
+static inline char* NvErrStr(NvAPI_Status r)
+{
+	static NvAPI_ShortString errStr = { 0 };
+	NvAPI_GetErrorMessage(r, errStr);
+	return errStr;
 }
 
 #ifdef __cplusplus

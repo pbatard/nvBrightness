@@ -68,12 +68,21 @@ static void tray_update(struct tray* tray);
 #define WM_TRAY_CALLBACK_MESSAGE (WM_USER + 1)
 #define ID_TRAY_FIRST 1000
 
-static WNDCLASSEX wc;
-static NOTIFYICONDATA nid;
-static HWND hwnd;
-static HMENU hmenu = NULL;
-static const wchar_t* class_name = NULL;
-static hotkey_cb hkcb;
+extern WNDCLASSEX wc;
+extern NOTIFYICONDATA nid;
+extern HWND hwnd;
+extern HMENU hmenu;
+extern const wchar_t* class_name;
+extern hotkey_cb hkcb;
+
+// Use GLOBAL_TRAY_INSTANCE *once* in one of the C/C++ sources
+#define GLOBAL_TRAY_INSTANCE        \
+WNDCLASSEX wc;                      \
+NOTIFYICONDATA nid;                 \
+HWND hwnd;                          \
+HMENU hmenu = NULL;                 \
+const wchar_t* class_name = NULL;   \
+hotkey_cb hkcb;
 
 static LRESULT CALLBACK _tray_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	switch (msg) {
