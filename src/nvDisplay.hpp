@@ -29,20 +29,15 @@
 
 using namespace std;
 
-class nvDisplay {
-	uint32_t displayId;
-	wstring registryKeyString;
-	float colorSetting[nvAttrMax][nvColorMax];
-	nvMonitor monitor;
+class nvDisplay : public nvMonitor {
+	uint32_t display_id;
+	wstring registry_key_string;
+	float color_setting[nvAttrMax][nvColorMax];
 public:
 	nvDisplay(uint32_t);
-	uint8_t GetMonitorLastKnownInput() { return monitor.GetMonitorLastKnownInput(); };
-	uint8_t GetMonitorInput() { return monitor.GetMonitorInput(); };
-	void SaveMonitorInput() { monitor.SaveMonitorInput(); };
-	uint8_t SetMonitorInput(uint8_t input) { return monitor.SetMonitorInput(input); };
 	bool UpdateGamma();
-	void ChangeBrightness(float delta);
+	void ChangeBrightness(float);
 	float GetBrightness();
-	void SaveColorSettings(bool ApplyToAll);
+	void SaveColorSettings(bool);
 	static size_t EnumerateDisplays();
 };

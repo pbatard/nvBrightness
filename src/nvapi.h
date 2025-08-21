@@ -189,7 +189,7 @@ static inline void NvAPI_Exit(void)
 		FreeLibrary(NvAPI_Library);
 }
 
-static inline char* NvErrStr(NvAPI_Status r)
+static inline char* NvAPI_GetErrorString(NvAPI_Status r)
 {
 	static NvAPI_ShortString errStr = { 0 };
 	NvAPI_GetErrorMessage(r, errStr);

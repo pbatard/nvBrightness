@@ -82,8 +82,7 @@ GLOBAL_NVAPI_INSTANCE;
 GLOBAL_TRAY_INSTANCE;
 wchar_t *APPLICATION_NAME = NULL, *COMPANY_NAME = NULL;	// Needed for registry.h
 struct tray tray = { 0 };
-list<nvDisplay> displayList;
-bool input_switching_supported = false, cancel_thread = false;
+list<nvDisplay> display_list;
 
 static version_t version = { 0 };
 static settings_t settings = { true, false, false, false, 0.5f };
@@ -132,9 +131,12 @@ static bool RegisterHotKeys(void)
 	bool b = true;
 	b &= tray_register_hotkey(hkPowerOffMonitor, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_END);
 	b &= tray_register_hotkey(hkRestoreInput, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_HOME);
-	if (input_switching_supported) {
-		b &= tray_register_hotkey(hkNextInput, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_OEM_PERIOD);
-		b &= tray_register_hotkey(hkPreviousInput, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_OEM_COMMA);
+	for (auto& display : display_list) {
+		if (display.SupportsVCP()) {
+			b &= tray_register_hotkey(hkNextInput, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_OEM_PERIOD);
+			b &= tray_register_hotkey(hkPreviousInput, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_OEM_COMMA);
+			break;
+		}
 	}
 
 	if (settings.use_alternate_keys) {
@@ -193,45 +195,45 @@ static HRESULT CALLBACK TaskDialogCallback(HWND hwnd, UINT uNotification, WPARAM
 // Callbacks for Tray
 static void AboutCallback(struct tray_menu* item)
 {
-	wchar_t szTitle[64] = L"";
-	wchar_t szHeader[128] = L"";
-	wchar_t szFooter[128] = L"";
-	wchar_t szProject[128] = L"";
-	wchar_t szReleaseUrl[64] = L"";
+	wchar_t title[64] = L"";
+	wchar_t header[128] = L"";
+	wchar_t footer[128] = L"";
+	wchar_t project[128] = L"";
+	wchar_t release_url[64] = L"";
 
 	(void)item;
 
-	swprintf_s(szTitle, ARRAYSIZE(szTitle), L"About %s", version.ProductName);
-	swprintf_s(szHeader, ARRAYSIZE(szHeader), L"%s v%d.%d", version.ProductName,
+	swprintf_s(title, ARRAYSIZE(title), L"About %s", version.ProductName);
+	swprintf_s(header, ARRAYSIZE(header), L"%s v%d.%d", version.ProductName,
 		version.fixed->dwProductVersionMS >> 16, version.fixed->dwProductVersionMS & 0xffff);
 	const wchar_t* szContent = L"Increase/decrease display brightness using nVidia controls.";
-	swprintf_s(szFooter, ARRAYSIZE(szFooter), L"%s, <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\">GPLv3</a>",
+	swprintf_s(footer, ARRAYSIZE(footer), L"%s, <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\">GPLv3</a>",
 		version.LegalCopyright);
-	swprintf_s(szProject, ARRAYSIZE(szProject), L"Project page\n%s", version.Comments);
-	swprintf_s(szReleaseUrl, ARRAYSIZE(szReleaseUrl), L"%s/releases/latest", version.Comments);
-	TASKDIALOG_BUTTON aCustomButtons[] = {
-		{ 1001, szProject },
+	swprintf_s(project, ARRAYSIZE(project), L"Project page\n%s", version.Comments);
+	swprintf_s(release_url, ARRAYSIZE(release_url), L"%s/releases/latest", version.Comments);
+	TASKDIALOG_BUTTON custom_buttons[] = {
+		{ 1001, project },
 		{ 1002, L"Latest release" },
 	};
 	TASKDIALOGCONFIG config = { 0 };
 	config.cbSize = sizeof(config);
 	config.dwFlags = TDF_USE_HICON_MAIN | TDF_USE_COMMAND_LINKS | TDF_ENABLE_HYPERLINKS | TDF_EXPANDED_BY_DEFAULT | TDF_EXPAND_FOOTER_AREA | TDF_ALLOW_DIALOG_CANCELLATION;
-	config.pButtons = aCustomButtons;
-	config.cButtons = sizeof(aCustomButtons) / sizeof(aCustomButtons[0]);
-	config.pszWindowTitle = szTitle;
+	config.pButtons = custom_buttons;
+	config.cButtons = sizeof(custom_buttons) / sizeof(custom_buttons[0]);
+	config.pszWindowTitle = title;
 	config.nDefaultButton = IDOK;
 	config.hMainIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON));
-	config.pszMainInstruction = szHeader;
+	config.pszMainInstruction = header;
 	config.pszContent = szContent;
-	config.pszFooter = szFooter;
+	config.pszFooter = footer;
 	config.pszFooterIcon = TD_INFORMATION_ICON;
 	config.dwCommonButtons = TDCBF_OK_BUTTON;
-	int nClickedBtn;
-	if (SUCCEEDED(ProperTaskDialogIndirect(&config, &nClickedBtn, NULL, NULL))) {
-		if (nClickedBtn == 1001)
+	int clicked_button;
+	if (SUCCEEDED(ProperTaskDialogIndirect(&config, &clicked_button, NULL, NULL))) {
+		if (clicked_button == 1001)
 			ShellExecute(NULL, L"Open", version.Comments, NULL, NULL, SW_SHOW);
-		if (nClickedBtn == 1002)
-			ShellExecute(NULL, L"Open", szReleaseUrl, NULL, NULL, SW_SHOW);
+		if (clicked_button == 1002)
+			ShellExecute(NULL, L"Open", release_url, NULL, NULL, SW_SHOW);
 	}
 }
 
@@ -337,13 +339,13 @@ static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
 	case hkIncreaseBrightness2:
 		delta += settings.increment;
 
-		for (auto& display : displayList) {
+		for (auto& display : display_list) {
 			display.ChangeBrightness(delta);
 			display.UpdateGamma();
 			display.SaveColorSettings(false);
 		}
-		if (displayList.size() >= 1) {
-			tray.icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + GetIconIndex(displayList.front())));
+		if (display_list.size() >= 1) {
+			tray.icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + GetIconIndex(display_list.front())));
 			tray_update(&tray);
 		}
 		break;
@@ -352,14 +354,17 @@ static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
 		break;
 	case hkRestoreInput:
 		// Apply to all displays
-		for (auto& display : displayList)
+		for (auto& display : display_list)
 			display.SetMonitorInput(0);
 		break;
 	case hkNextInput:
 	case hkPreviousInput:
 		// Only apply to first display
-		input = displayList.front().SetMonitorInput((wparam == hkNextInput) ? VCP_INPUT_NEXT : VCP_INPUT_PREVIOUS);
-		logger("Switched to input: %s\n", InputToString(input));
+		input = display_list.front().SetMonitorInput((wparam == hkNextInput) ? VCP_INPUT_NEXT : VCP_INPUT_PREVIOUS);
+		if (input != 0)
+			logger("Switched to input: %s\n", nvDisplay::InputToString(input));
+		else
+			logger("Failed to switch inputs\n");
 		break;
 	case hkRegisterHotkeys:
 		RegisterHotKeys();
@@ -383,12 +388,12 @@ static ULONG CALLBACK PowerEventCallback(PVOID Context, ULONG Type, PVOID Settin
 	case PBT_APMSTANDBY:
 		logger("Suspending system - saving monitor inputs\n");
 		// User may have switched inputs manually so save the current one
-		for (auto& display : displayList)
+		for (auto& display : display_list)
 			display.SaveMonitorInput();
 		break;
 	case PBT_APMRESUMESUSPEND:
 		logger("Resume from suspend - restoring monitor inputs\n");
-		for (auto& display : displayList)
+		for (auto& display : display_list)
 			display.SetMonitorInput(0);
 		break;
 	default:
@@ -410,7 +415,7 @@ static int NvInit(void)
 		return -1;
 	r = NvAPI_Initialize();
 	if (r != NVAPI_OK) {
-		logger("NvAPI_Initialize: %d %s\n", r, NvErrStr(r));
+		logger("NvAPI_Initialize: %d %s\n", r, NvAPI_GetErrorString(r));
 		if (NvAPI_Exit != NULL)
 			NvAPI_Exit();
 		return -1;
@@ -427,18 +432,18 @@ static __inline void NvExit(void)
 static int NvGetGpuCount(void)
 {
 	NvAPI_Status r;
-	NvPhysicalGpuHandle gpuHandles[NVAPI_MAX_PHYSICAL_GPUS] = { 0 };
-	NvU32 gpuCount = 0;
+	NvPhysicalGpuHandle gpu_handles[NVAPI_MAX_PHYSICAL_GPUS] = { 0 };
+	NvU32 gpu_count = 0;
 
 	if (NvAPI_EnumPhysicalGPUs == NULL)
 		return -1;
-	r = NvAPI_EnumPhysicalGPUs(gpuHandles, &gpuCount);
+	r = NvAPI_EnumPhysicalGPUs(gpu_handles, &gpu_count);
 	if (r != NVAPI_OK) {
-		logger("NvAPI_EnumPhysicalGPUs: %d %s\n", r, NvErrStr(r));
+		logger("NvAPI_EnumPhysicalGPUs: %d %s\n", r, NvAPI_GetErrorString(r));
 		return -1;
 	}
 
-	return (int)gpuCount;
+	return (int)gpu_count;
 }
 
 // I've said it before and I'll say it again:
@@ -455,7 +460,7 @@ bool PopulateVersionData(void)
 	} *lpTranslate;
 	wchar_t exe_path[MAX_PATH], SubBlock[256];
 	DWORD size, dummy;
-	BOOL br;
+	BOOL b;
 
 	GetModuleFileName(NULL, exe_path, ARRAYSIZE(exe_path));
 	size = GetFileVersionInfoSize(exe_path, &dummy);
@@ -468,8 +473,8 @@ bool PopulateVersionData(void)
 	if (!GetFileVersionInfo(exe_path, 0, size, version.data))
 		return false;
 
-	br = VerQueryValue(version.data, L"\\", (void**)&version.fixed, (PUINT)&size);
-	if (!br || version.fixed == NULL || size != sizeof(VS_FIXEDFILEINFO))
+	b = VerQueryValue(version.data, L"\\", (void**)&version.fixed, (PUINT)&size);
+	if (!b || version.fixed == NULL || size != sizeof(VS_FIXEDFILEINFO))
 		return false;
 
 	if (!VerQueryValue(version.data, L"\\VarFileInfo\\Translation", (LPVOID*)&lpTranslate, (PUINT)&size) ||
@@ -541,7 +546,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		{ .text = L"Brightness +\t［⊞］［Shift］［PgUp］", .cb = IncreaseBrightnessCallback },
 		{ .text = L"Brightness −\t［⊞］［Shift］［PgDn］", .cb = DecreaseBrightnessCallback },
 		{ .text = L"Power off display\t［⊞］［Shift］［End］", .cb = PowerOffCallback },
-		{ .text = L"Reselect monitor input\t［⊞］［Shift］［Home］", .disabled = (displayList.front().GetMonitorLastKnownInput() == 0),
+		{ .text = L"Reselect monitor input\t［⊞］［Shift］［Home］", .disabled = (display_list.front().GetMonitorLastKnownInput() == 0),
 			.cb = RestoreInputCallback },
 		{ .text = L"Next monitor input\t［⊞］［Shift］［.］", .disabled = true, },
 		{ .text = L"Previous monitor input\t［⊞］［Shift］［,］", .disabled = true },
@@ -549,7 +554,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		{ .text = L"Auto Start", .checked = settings.autostart, .cb = AutoStartCallback },
 		{ .text = L"Pause", .checked = 0, .cb = PauseCallback },
 		{ .text = L"Use Internet keys", .checked = settings.use_alternate_keys, .cb = AlternateKeysCallback, },
-		{ .text = L"Reselect input after sleep", .disabled = (displayList.front().GetMonitorLastKnownInput() == 0),
+		{ .text = L"Reselect input after sleep", .disabled = (display_list.front().GetMonitorLastKnownInput() == 0),
 			.checked = settings.resume_to_last_input, .cb = ResumeToLastInputCallback },
 		{ .text = L"About", .cb = AboutCallback },
 		{ .text = L"-" },
@@ -561,8 +566,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		menu[1].text = L"Brightness −\t［Internet Back］ or ［Alt］［←］";
 	}
 
-	if (displayList.size() >= 1)
-		icon_index = GetIconIndex(displayList.front());
+	if (display_list.size() >= 1)
+		icon_index = GetIconIndex(display_list.front());
 	tray.icon =	LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + icon_index));
 	tray.menu = menu;
 
@@ -591,10 +596,9 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	ret = 0;
 
 out:
-	cancel_thread = true;
 	PowerUnregisterSuspendResumeNotification(power_handle);
 	UnRegisterHotKeys();
-	displayList.clear();
+	display_list.clear();
 	NvExit();
 	free(version.data);
 #ifdef _DEBUG

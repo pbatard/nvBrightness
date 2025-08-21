@@ -81,6 +81,4 @@ enum {
 };
 
 extern void logger(const char* format, ...);
-extern const char* InputToString(uint8_t input);
 extern struct tray tray;
-extern bool input_switching_supported, cancel_thread;
