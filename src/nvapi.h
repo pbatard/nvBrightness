@@ -103,11 +103,13 @@ typedef int (NVAPI_API_CALL *NVAPI_UNLOAD) (void);
 typedef int (NVAPI_API_CALL *NVAPI_GETERRORMESSAGE) (NvAPI_Status, NvAPI_ShortString);
 typedef int (NVAPI_API_CALL *NVAPI_ENUMPHYSICALGPUS) (NvPhysicalGpuHandle*, NvU32*);
 typedef int (NVAPI_API_CALL *NVAPI_GPU_GETCONNECTEDDISPLAYIDS) (NvPhysicalGpuHandle, NV_GPU_DISPLAYIDS*, NvU32*, NvU32);
+typedef int (NVAPI_API_CALL *NVAPI_GPU_GETALLDISPLAYIDS) (NvPhysicalGpuHandle, NV_GPU_DISPLAYIDS*, NvU32*);
 // Undocumented by nVidia. Takes a properly formatted NV_GAMMA_CORRECTION_EX* table.
 typedef int (NVAPI_API_CALL *NVAPI_DISP_SETTARGETGAMMACORRECTION) (NvU32, NV_GAMMA_CORRECTION_EX*);
 // Undocumented by nVidia. Straightforward.
 typedef int (NVAPI_API_CALL *NVAPI_DISP_GETDISPLAYHANDLEFROMDISPLAYID) (NvU32, NvDisplayHandle*);
 // Undocumented by nVidia. Appears to deal with a GUID internally rather than an LUID. Second parameter must be set to 1.
+// Only works with actively connected displays (i.e. can't get LUIDs for displays that are known but not present)
 typedef int (NVAPI_API_CALL* NVAPI_SYS_GETLUIDFROMDISPLAYID) (NvU32, NvU32, GUID*);
 typedef int (NVAPI_API_CALL *NVAPI_GETASSOCIATEDNVIDIADISPLAYNAME) (NvDisplayHandle, NvAPI_ShortString);
 typedef void (*NvAPI_Logger)(const char*, ...);
@@ -119,6 +121,7 @@ extern NVAPI_UNLOAD NvAPI_Unload;
 extern NVAPI_GETERRORMESSAGE NvAPI_GetErrorMessage;
 extern NVAPI_ENUMPHYSICALGPUS NvAPI_EnumPhysicalGPUs;
 extern NVAPI_GPU_GETCONNECTEDDISPLAYIDS NvAPI_GPU_GetConnectedDisplayIds;
+extern NVAPI_GPU_GETALLDISPLAYIDS NvAPI_GPU_GetAllDisplayIds;
 extern NVAPI_DISP_SETTARGETGAMMACORRECTION NvAPI_DISP_SetTargetGammaCorrection;
 extern NVAPI_SYS_GETLUIDFROMDISPLAYID NvAPI_SYS_GetLUIDFromDisplayID;
 extern NVAPI_DISP_GETDISPLAYHANDLEFROMDISPLAYID NvAPI_DISP_GetDisplayHandleFromDisplayId;
@@ -133,6 +136,7 @@ NVAPI_UNLOAD NvAPI_Unload = NULL;                                               
 NVAPI_GETERRORMESSAGE NvAPI_GetErrorMessage = NULL;                                         \
 NVAPI_ENUMPHYSICALGPUS NvAPI_EnumPhysicalGPUs = NULL;                                       \
 NVAPI_GPU_GETCONNECTEDDISPLAYIDS NvAPI_GPU_GetConnectedDisplayIds = NULL;                   \
+NVAPI_GPU_GETALLDISPLAYIDS NvAPI_GPU_GetAllDisplayIds = NULL;                               \
 NVAPI_DISP_SETTARGETGAMMACORRECTION NvAPI_DISP_SetTargetGammaCorrection = NULL;             \
 NVAPI_SYS_GETLUIDFROMDISPLAYID NvAPI_SYS_GetLUIDFromDisplayID = NULL;                       \
 NVAPI_DISP_GETDISPLAYHANDLEFROMDISPLAYID NvAPI_DISP_GetDisplayHandleFromDisplayId = NULL;   \
@@ -173,6 +177,7 @@ static inline int NvAPI_Init(NvAPI_Logger logger)
 	NV_LOAD_ADDR(NvAPI_GetErrorMessage, NVAPI_GETERRORMESSAGE, nvapi_QueryInterface, 0x6C2D048C, NVAPI, logger);
 	NV_LOAD_ADDR(NvAPI_EnumPhysicalGPUs, NVAPI_ENUMPHYSICALGPUS, nvapi_QueryInterface, 0xE5AC921F, NVAPI, logger);
 	NV_LOAD_ADDR(NvAPI_GPU_GetConnectedDisplayIds, NVAPI_GPU_GETCONNECTEDDISPLAYIDS, nvapi_QueryInterface, 0x0078DBA2, NVAPI, logger);
+	NV_LOAD_ADDR(NvAPI_GPU_GetAllDisplayIds, NVAPI_GPU_GETALLDISPLAYIDS, nvapi_QueryInterface, 0x785210A2, NVAPI, logger);
 	NV_LOAD_ADDR(NvAPI_DISP_SetTargetGammaCorrection, NVAPI_DISP_SETTARGETGAMMACORRECTION, nvapi_QueryInterface, 0x7082A053, NVAPI, logger);
 	NV_LOAD_ADDR(NvAPI_DISP_GetDisplayHandleFromDisplayId, NVAPI_DISP_GETDISPLAYHANDLEFROMDISPLAYID, nvapi_QueryInterface, 0x96437923, NVAPI, logger);
 	NV_LOAD_ADDR(NvAPI_SYS_GetLUIDFromDisplayID, NVAPI_SYS_GETLUIDFROMDISPLAYID, nvapi_QueryInterface, 0xD4A859F2, NVAPI, logger);

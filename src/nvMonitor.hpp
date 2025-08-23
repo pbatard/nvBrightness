@@ -29,7 +29,7 @@
 
 #include <string>
 #include <vector>
-#include <thread>
+#include <future>
 
 // How long we may retry GetVCPFeatureAndVCPFeatureReply(), in ms
 #define VCP_FEATURE_MAX_RETRY_TIME      500
@@ -42,20 +42,20 @@ class nvMonitor {
 	wchar_t device_id[128] = { 0 };
 	vector<PHYSICAL_MONITOR> physical_monitors;
 	vector<uint8_t> allowed_inputs;
-	uint8_t last_known_input = 0;
+	uint8_t home_input = 0;
 	string model_name = "Unknown";
-	thread worker_thread;
-	bool cancel_worker_thread = false;
 	bool supports_vcp = false;
+	bool cancel_allowed_inputs_task = false;
+	future<void> allowed_inputs_task;
+	void GetAllowedInputs();
 public:
+	static const char* InputToString(uint8_t input);
 	~nvMonitor();
 	void InitializeMonitor(uint32_t);
-	uint8_t GetMonitorLastKnownInput() const { return last_known_input; };
+	uint8_t GetHomeInput() const { return home_input; };
+	void SaveHomeInput() { home_input = GetMonitorInput(); };
 	uint8_t GetMonitorInput();
-	void SaveMonitorInput() { last_known_input = GetMonitorInput(); };
 	uint8_t SetMonitorInput(uint8_t);
 	PHYSICAL_MONITOR* GetFirstPhysicalMonitor() { return (physical_monitors.size() == 0) ? NULL : &physical_monitors[0]; };
-	void GetMonitorAllowedInputs();
 	bool SupportsVCP() { return supports_vcp; };
-	static const char* InputToString(uint8_t input);
 };

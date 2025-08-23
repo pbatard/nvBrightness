@@ -34,11 +34,12 @@
 
 #include <format>
 #include <list>
+#include <numeric>
 
 #include "nvDisplay.hpp"
 
-extern list<nvDisplay> display_list;
-
+// Calculates a Gamma Ramp value, for a specific color, at an index in range [0-1023], for
+// use with NvAPI_DISP_SetTargetGammaCorrection() in the same way nVidia does.
 static NvF32 CalculateGamma(NvS32 index, NvF32 brightness, NvF32 contrast, NvF32 gamma)
 {
 	contrast = (contrast - 100.0f) / 100.0f;
@@ -62,34 +63,31 @@ static NvF32 CalculateGamma(NvS32 index, NvF32 brightness, NvF32 contrast, NvF32
 	return gamma;
 }
 
-// nvDisplay methods
 nvDisplay::nvDisplay(uint32_t display_id)
 {
-	GUID guid = { 0 };
-	NvAPI_Status r;
-
 	this->display_id = display_id;
+	logger("Detected nVidia display 0x%08x with LUID %u\n", display_id, GetLuid());
 	InitializeMonitor(display_id);
+	// Retrieve the list of LUIDs we have found to be associated with this display.
+	wchar_t* multi_sz = ReadRegistryKeyMultiStr(HKEY_CURRENT_USER, format(L"NVID_{:#08x}", display_id).c_str());
+	const wchar_t* p = multi_sz;
+	while (*p != L'\0') {
+		luids.insert(static_cast<uint32_t>(stoul(p)));
+		p += wcslen(p) + 1;
+	}
+	LoadColorSettings();
+}
 
-	r = NvAPI_SYS_GetLUIDFromDisplayID(display_id, 1, &guid);
+uint32_t nvDisplay::GetLuid()
+{
+	GUID guid = { 0 };
+	NvAPI_Status r = NvAPI_SYS_GetLUIDFromDisplayID(display_id, 1, &guid);
 	if (r != NVAPI_OK) {
 		logger("NvAPI_SYS_GetLUIDFromDisplayID(0x%08x): %d %s\n", display_id, r, NvAPI_GetErrorString(r));
-		for (auto j = 0; j < 9; j++)
-			color_setting[j / 3][j % 3] = 100.0f;
-	} else {
-		// The part we are after is the second DWORD of the GUID, XOR'd with 0xF00000000
-		registry_key_string = format(L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices\\{}-0\\Color",
-			((uint32_t*)&guid)[1] ^ 0xf0000000);
-		wchar_t reg_color_key_str[128];
-		for (auto i = 0; i < 9; i++) {
-			swprintf_s(reg_color_key_str, ARRAYSIZE(reg_color_key_str),
-				L"%s\\%d", registry_key_string.c_str(), NV_COLOR_REGISTRY_INDEX + i);
-			color_setting[i / 3][i % 3] = (float)ReadRegistryKey32(HKEY_CURRENT_USER, reg_color_key_str);
-			// Set the default value if we couldn't read the key or it's out of bounds
-			if (color_setting[i / 3][i % 3] < 80.0f || color_setting[i / 3][i % 3] > 120.0f)
-				color_setting[i / 3][i % 3] = 100.0f;
-		}
+		return 0;
 	}
+	// The part we are after is the second DWORD of the GUID, XOR'd with 0xF00000000
+	return ((uint32_t*)&guid)[1] ^ 0xf0000000;
 }
 
 float nvDisplay::GetBrightness()
@@ -137,23 +135,63 @@ bool nvDisplay::UpdateGamma()
 	return r == NVAPI_OK;
 }
 
-void nvDisplay::SaveColorSettings(bool apply_to_all)
+void nvDisplay::LoadColorSettings()
 {
+	uint32_t luid = GetLuid();
 	wchar_t reg_color_key_str[128];
 
-	for (auto i = 0; i < 9; i++) {
-		swprintf_s(reg_color_key_str, ARRAYSIZE(reg_color_key_str),
-			L"%s\\%d", registry_key_string.c_str(), NV_COLOR_REGISTRY_INDEX + i);
-		WriteRegistryKey32(HKEY_CURRENT_USER, reg_color_key_str, (uint32_t)color_setting[i / 3][i % 3]);
+	if (luid == 0) {
+		for (auto i = 0; i < 9; i++)
+			color_setting[i / 3][i % 3] = 100.0f;
+	} else {
+		for (auto i = 0; i < 9; i++) {
+			swprintf_s(reg_color_key_str, ARRAYSIZE(reg_color_key_str),
+				L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices\\%u-0\\Color\\%u",
+				luid, NV_COLOR_REGISTRY_INDEX + i);
+			color_setting[i / 3][i % 3] = (float)ReadRegistryKey32(HKEY_CURRENT_USER, reg_color_key_str);
+			// Set the default value if we couldn't read the key or it's out of bounds
+			if (color_setting[i / 3][i % 3] < 80.0f || color_setting[i / 3][i % 3] > 120.0f)
+				color_setting[i / 3][i % 3] = 100.0f;
+		}
 	}
-	// Add the NvCplGammaSet key to indicate that Gamma should be restored by the nVidia driver
-	swprintf_s(reg_color_key_str, ARRAYSIZE(reg_color_key_str), L"%s\\NvCplGammaSet", registry_key_string.c_str());
-	WriteRegistryKey32(HKEY_CURRENT_USER, reg_color_key_str, 1);
-
-	// TODO: Add an option to apply to all displays
 }
 
-size_t nvDisplay::EnumerateDisplays()
+void nvDisplay::SaveColorSettings()
+{
+	uint32_t current_luid = GetLuid();
+	wchar_t reg_color_key_str[128];
+
+	// Update and save the LUID list if needed
+	if (!luids.contains(current_luid)) {
+		luids.insert(current_luid);
+		wstring multi_sz = accumulate(
+			luids.begin(), luids.end(), wstring{},
+			[](wstring acc, uint32_t value) {
+				acc += to_wstring(value);
+				acc.push_back(L'\0');
+				return acc;
+			}
+		);
+		multi_sz.push_back(L'\0');
+		WriteRegistryKeyMultiStr(HKEY_CURRENT_USER, format(L"NVID_{:#08x}", display_id).c_str(), multi_sz.c_str());
+	}
+
+	// Update all the LUIDs known for this display
+	for (auto& luid : luids) {
+		for (auto i = 0; i < 9; i++) {
+			swprintf_s(reg_color_key_str, ARRAYSIZE(reg_color_key_str),
+				L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices\\%u-0\\Color\\%u",
+				luid, NV_COLOR_REGISTRY_INDEX + i);
+			WriteRegistryKey32(HKEY_CURRENT_USER, reg_color_key_str, (uint32_t)color_setting[i / 3][i % 3]);
+		}
+		// Add the NvCplGammaSet key to indicate that Gamma should be restored by the nVidia driver
+		swprintf_s(reg_color_key_str, ARRAYSIZE(reg_color_key_str),
+			L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices\\%u-0\\Color\\NvCplGammaSet", luid);
+		WriteRegistryKey32(HKEY_CURRENT_USER, reg_color_key_str, 1);
+	}
+}
+
+size_t nvDisplay::EnumerateDisplays(list<nvDisplay>& display_list)
 {
 	NvAPI_Status r;
 	NvPhysicalGpuHandle gpu_handles[NVAPI_MAX_PHYSICAL_GPUS] = { 0 };

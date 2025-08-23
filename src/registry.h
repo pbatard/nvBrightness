@@ -43,7 +43,8 @@ static __inline BOOL _GetRegistryKey(HKEY key_root, const wchar_t* key_name, DWO
 
 	memset(dest, 0, dest_size);
 
-	if (key_name == NULL || COMPANY_NAME == NULL || APPLICATION_NAME == NULL)
+	if (key_name == NULL || COMPANY_NAME == NULL || COMPANY_NAME[0] == L'\0' ||
+		APPLICATION_NAME == NULL || APPLICATION_NAME[0] == L'\0')
 		return FALSE;
 
 	for (i = wcslen(key_name); i > 0; i--) {
@@ -97,9 +98,11 @@ static __inline BOOL _SetRegistryKey(HKEY key_root, const wchar_t* key_name, DWO
 	HKEY hSoftware = NULL, hApp = NULL;
 	DWORD dwDisp, dwType = reg_type;
 
-	if (key_name == NULL || key_root == NULL || COMPANY_NAME == NULL || APPLICATION_NAME == NULL)
+	if (key_name == NULL || COMPANY_NAME == NULL || COMPANY_NAME[0] == L'\0' ||
+		APPLICATION_NAME == NULL || APPLICATION_NAME[0] == L'\0')
 		return FALSE;
-	if (key_root != HKEY_CURRENT_USER)
+	// MSVC's static analyzer is dumb and needs BOTH conditions
+	if (key_root == NULL || key_root != HKEY_CURRENT_USER)
 		return FALSE;
 
 	for (i = wcslen(key_name); i > 0; i--) {
@@ -233,13 +236,32 @@ static __inline BOOL WriteRegistryKey32(HKEY root, const wchar_t* key, int32_t v
 #define SetRegistryKeyStr(root, key, str) _SetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)wcslen(str) * sizeof(WCHAR))
 // Use a static buffer - don't allocate
 static __inline wchar_t* ReadRegistryKeyStr(HKEY root, const wchar_t* key) {
-	static wchar_t str[512];
+	static wchar_t str[512 + 1];
 	str[0] = 0;
-	_GetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)(sizeof(str) - sizeof(WCHAR)));
+	_GetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)sizeof(str));
 	str[ARRAYSIZE(str) - 1] = 0;
 	return str;
 }
 #define WriteRegistryKeyStr SetRegistryKeyStr
+
+/* Helpers for Multi-String registry operations */
+#define GetRegistryKeyMultiStr(root, key, multi_str, len) _GetRegistryKey(root, key, REG_MULTI_SZ, (LPBYTE)multi_str, (DWORD)len)
+#define SetRegistryKeyMultiStr(root, key, multi_str, len) _SetRegistryKey(root, key, REG_MULTI_SZ, (LPBYTE)multi_str, (DWORD)len)
+// Use a static buffer - don't allocate
+static __inline wchar_t* ReadRegistryKeyMultiStr(HKEY root, const wchar_t* key) {
+	static wchar_t multi_str[512 + 2];
+	multi_str[0] = 0;
+	multi_str[1] = 0;
+	_GetRegistryKey(root, key, REG_SZ, (LPBYTE)multi_str, (DWORD)sizeof(multi_str));
+	multi_str[ARRAYSIZE(multi_str) - 1] = 0;
+	multi_str[ARRAYSIZE(multi_str) - 2] = 0;
+	return multi_str;
+}
+static __inline void WriteRegistryKeyMultiStr(HKEY root, const wchar_t* key, const wchar_t* val) {
+	size_t len;
+	for (len = 0; val[len] != 0; len += wcslen(&val[len]) + 1);
+	SetRegistryKeyMultiStr(root, key, val, (len + 1) * sizeof(wchar_t));
+}
 
 #ifdef __cplusplus
 }

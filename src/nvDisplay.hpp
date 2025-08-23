@@ -23,6 +23,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <string>
+#include <set>
 
 #include "nvBrightness.h"
 #include "nvMonitor.hpp"
@@ -31,13 +32,15 @@ using namespace std;
 
 class nvDisplay : public nvMonitor {
 	uint32_t display_id;
-	wstring registry_key_string;
+	set<uint32_t> luids;
 	float color_setting[nvAttrMax][nvColorMax];
 public:
 	nvDisplay(uint32_t);
+	uint32_t GetLuid();
 	bool UpdateGamma();
 	void ChangeBrightness(float);
 	float GetBrightness();
-	void SaveColorSettings(bool);
-	static size_t EnumerateDisplays();
+	void LoadColorSettings();
+	void SaveColorSettings();
+	static size_t EnumerateDisplays(list<nvDisplay>& display_list);
 };

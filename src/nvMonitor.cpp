@@ -36,6 +36,8 @@
 #include <regex>
 #include <sstream>
 
+#pragma comment(lib, "dxva2.lib")
+
 using namespace std::chrono;
 
 static vector<string> SplitByWhitespace(const string& s)
@@ -103,7 +105,7 @@ void nvMonitor::InitializeMonitor(uint32_t display_id)
 
 	// Finish initializing our instance
 	monitor_handle = NULL;
-	last_known_input = 0;
+	home_input = 0;
 	memset(display_name, 0, sizeof(display_name));
 	memset(device_id, 0, sizeof(device_id));
 
@@ -164,39 +166,39 @@ have_physical_handle:
 	if (!GetPhysicalMonitorsFromHMONITOR(monitor_handle, num_physical_monitors, physical_monitors.data()))
 		physical_monitors.resize(0);
 
-	auto physical_monitor = GetFirstPhysicalMonitor();
-	if (physical_monitor != NULL) {
+	if (physical_monitors.size() != 0) {
 		DWORD input = 0, max = 0;
 		steady_clock::time_point begin = steady_clock::now();
-		while (!GetVCPFeatureAndVCPFeatureReply(physical_monitor->hPhysicalMonitor, VCP_INPUT_SOURCE, NULL, &input, &max)) {
+		while (!GetVCPFeatureAndVCPFeatureReply(physical_monitors.at(0).hPhysicalMonitor, VCP_INPUT_SOURCE, NULL, &input, &max)) {
 			auto elapsed = duration_cast<milliseconds>(steady_clock::now() - begin);
 			if (elapsed.count() > VCP_FEATURE_MAX_RETRY_TIME) {
 				logger("Could not retrieve monitor input: error 0x%X\n", GetLastError());
 				return;
 			}
 		}
-		last_known_input = (uint8_t)input;
-		if (last_known_input != 0) {
+		// Store the "home" input, i.e. the input the monitor was using when we started the app
+		home_input = (uint8_t)input;
+		if (home_input != 0) {
 			// If we could read the current input, we assume that VCP is supported
 			supports_vcp = true;
-			logger("Current monitor input: %s\n", InputToString(last_known_input));
-			worker_thread = thread(&nvMonitor::GetMonitorAllowedInputs, this);
-			worker_thread.detach();
+			logger("Current monitor input: %s\n", InputToString(home_input));
+			// Start a an asynchronous task to get this monitor's available inputs
+			allowed_inputs_task = async(launch::async, &nvMonitor::GetAllowedInputs, this);
 		}
 	}
 }
 
 nvMonitor::~nvMonitor()
 {
-	cancel_worker_thread = true;
-	if (worker_thread.joinable())
-		worker_thread.join();
+	cancel_allowed_inputs_task = true;
+	// Wait for the GetAllowedInputs() task to finish
+	allowed_inputs_task.get();
 	DestroyPhysicalMonitors((DWORD)physical_monitors.size(), physical_monitors.data());
 }
 
 // Issuing CapabilitiesRequestAndCapabilitiesReply() can be a lengthy process and may need
-// to be reiterated multiple times before we get a valid answer. So use a thread.
-void nvMonitor::GetMonitorAllowedInputs()
+// to be reiterated multiple times before we get a valid answer. So use an async task.
+void nvMonitor::GetAllowedInputs()
 {
 	char* capabilities_string = NULL;
 	DWORD i = 1, size = 0;
@@ -208,7 +210,7 @@ void nvMonitor::GetMonitorAllowedInputs()
 	// GetCapabilitiesStringLength() is *VERY* temperamental, so we retry up to VCP_CAPS_MAX_RETRY_TIME
 	steady_clock::time_point begin = steady_clock::now();
 	for (i = 1; !GetCapabilitiesStringLength(physical_monitor->hPhysicalMonitor, &size); i++) {
-		if (cancel_worker_thread)
+		if (cancel_allowed_inputs_task)
 			return;
 		auto elapsed = duration_cast<seconds>(steady_clock::now() - begin);
 		if (elapsed.count() > VCP_CAPS_MAX_RETRY_TIME) {
@@ -224,7 +226,7 @@ void nvMonitor::GetMonitorAllowedInputs()
 		goto out;
 
 	if (CapabilitiesRequestAndCapabilitiesReply(physical_monitor->hPhysicalMonitor, capabilities_string, size)) {
-		if (cancel_worker_thread)
+		if (cancel_allowed_inputs_task)
 			goto out;
 		string capabilities = capabilities_string;
 		auto elapsed = duration_cast<milliseconds>(steady_clock::now() - begin);
@@ -251,11 +253,8 @@ void nvMonitor::GetMonitorAllowedInputs()
 			}
 		}
 		// No points in allowing input switching if there's only one
-		if (allowed_inputs.size() > 1 && tray.menu[4].disabled) {
-			tray.menu[4].disabled = false;
-			tray.menu[5].disabled = false;
-			tray_update(&tray);
-			// So, the problem with Windows hot keys is that they are registered for a specific
+		if (allowed_inputs.size() > 1 && !cancel_allowed_inputs_task) {
+			// Now, the problem with Windows hot keys is that they are registered for a specific
 			// thread rather than globally. Which means that if we just call RegisterHotKeys()
 			// from this thread, we are going to have an issue.
 			// Long story short, we simulate a fake hotkey press, to re-register the hotkeys.
@@ -304,14 +303,13 @@ uint8_t nvMonitor::SetMonitorInput(uint8_t requested)
 	if (physical_monitor == NULL)
 		return 0;
 
-	// If input is 0, reselect the last known input
+	if (requested == VCP_INPUT_HOME)
+		requested = home_input;
 	if (requested == 0)
-		requested = last_known_input;
-	if (current == 0 || requested == 0)
 		return 0;
 
 	if (requested == VCP_INPUT_NEXT || requested == VCP_INPUT_PREVIOUS) {
-		if (allowed_inputs.size() == 0)
+		if (allowed_inputs.size() == 0 || current == 0)
 			return 0;
 		auto pos = lower_bound(allowed_inputs.begin(), allowed_inputs.end(), current) - allowed_inputs.begin();
 		pos += allowed_inputs.size();	// Prevent an underflow when subtracting -1 from 0
@@ -328,7 +326,6 @@ uint8_t nvMonitor::SetMonitorInput(uint8_t requested)
 		else
 			ret = requested;
 	}
-	last_known_input = ret;
 
 	return ret;
 }

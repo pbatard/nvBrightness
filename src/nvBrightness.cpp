@@ -53,11 +53,9 @@ using namespace std;
 #include "nvDisplay.hpp"
 
 #pragma comment(lib, "comctl32.lib")
-#pragma comment(lib, "dxva2.lib")
 #pragma comment(lib, "powrprof.lib")
 #pragma comment(lib, "shcore.lib")
 #pragma comment(lib, "version.lib")
-
 
 // Structs
 typedef struct {
@@ -81,11 +79,11 @@ typedef struct {
 GLOBAL_NVAPI_INSTANCE;
 GLOBAL_TRAY_INSTANCE;
 wchar_t *APPLICATION_NAME = NULL, *COMPANY_NAME = NULL;	// Needed for registry.h
-struct tray tray = { 0 };
-list<nvDisplay> display_list;
 
 static version_t version = { 0 };
 static settings_t settings = { true, false, false, false, 0.5f };
+static struct tray tray = { 0 };
+static list<nvDisplay> display_list;
 
 // Logging
 void logger(const char* format, ...)
@@ -342,7 +340,7 @@ static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
 		for (auto& display : display_list) {
 			display.ChangeBrightness(delta);
 			display.UpdateGamma();
-			display.SaveColorSettings(false);
+			display.SaveColorSettings();
 		}
 		if (display_list.size() >= 1) {
 			tray.icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + GetIconIndex(display_list.front())));
@@ -355,7 +353,7 @@ static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
 	case hkRestoreInput:
 		// Apply to all displays
 		for (auto& display : display_list)
-			display.SetMonitorInput(0);
+			display.SetMonitorInput(VCP_INPUT_HOME);
 		break;
 	case hkNextInput:
 	case hkPreviousInput:
@@ -367,6 +365,12 @@ static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
 			logger("Failed to switch inputs\n");
 		break;
 	case hkRegisterHotkeys:
+		// This fake hotkey message is issued when input switching becomes available
+		if (tray.menu[4].disabled) {
+			tray.menu[4].disabled = false;
+			tray.menu[5].disabled = false;
+			tray_update(&tray);
+		}
 		RegisterHotKeys();
 		break;
 	default:
@@ -389,12 +393,12 @@ static ULONG CALLBACK PowerEventCallback(PVOID Context, ULONG Type, PVOID Settin
 		logger("Suspending system - saving monitor inputs\n");
 		// User may have switched inputs manually so save the current one
 		for (auto& display : display_list)
-			display.SaveMonitorInput();
+			display.SaveHomeInput();
 		break;
 	case PBT_APMRESUMESUSPEND:
 		logger("Resume from suspend - restoring monitor inputs\n");
 		for (auto& display : display_list)
-			display.SetMonitorInput(0);
+			display.SetMonitorInput(VCP_INPUT_HOME);
 		break;
 	default:
 		break;
@@ -539,14 +543,14 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	settings.autostart = (ReadRegistryKeyStr(HKEY_CURRENT_USER, key_name)[0] != 0);
 
 	// Build the display list
-	nvDisplay::EnumerateDisplays();
+	nvDisplay::EnumerateDisplays(display_list);
 
 	// Create the tray menu
 	static struct tray_menu menu[] = {
 		{ .text = L"Brightness +\t［⊞］［Shift］［PgUp］", .cb = IncreaseBrightnessCallback },
 		{ .text = L"Brightness −\t［⊞］［Shift］［PgDn］", .cb = DecreaseBrightnessCallback },
 		{ .text = L"Power off display\t［⊞］［Shift］［End］", .cb = PowerOffCallback },
-		{ .text = L"Reselect monitor input\t［⊞］［Shift］［Home］", .disabled = (display_list.front().GetMonitorLastKnownInput() == 0),
+		{ .text = L"Reselect monitor input\t［⊞］［Shift］［Home］", .disabled = (display_list.front().GetHomeInput() == 0),
 			.cb = RestoreInputCallback },
 		{ .text = L"Next monitor input\t［⊞］［Shift］［.］", .disabled = true, },
 		{ .text = L"Previous monitor input\t［⊞］［Shift］［,］", .disabled = true },
@@ -554,7 +558,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		{ .text = L"Auto Start", .checked = settings.autostart, .cb = AutoStartCallback },
 		{ .text = L"Pause", .checked = 0, .cb = PauseCallback },
 		{ .text = L"Use Internet keys", .checked = settings.use_alternate_keys, .cb = AlternateKeysCallback, },
-		{ .text = L"Reselect input after sleep", .disabled = (display_list.front().GetMonitorLastKnownInput() == 0),
+		{ .text = L"Reselect input after sleep", .disabled = (display_list.front().GetHomeInput() == 0),
 			.checked = settings.resume_to_last_input, .cb = ResumeToLastInputCallback },
 		{ .text = L"About", .cb = AboutCallback },
 		{ .text = L"-" },

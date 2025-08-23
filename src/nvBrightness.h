@@ -19,13 +19,6 @@
 
 #pragma once
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <stdint.h>
-#include <stdbool.h>
-
-#include "tray.h"
-
 // Using a GUID for the tray icon allows the executable to be moved around or change version
 // without requiring the user to go through the taskbar settings to re-enable the icon.
 #ifdef _DEBUG
@@ -44,6 +37,7 @@
 #define VCP_INPUT_SOURCE            0x60
 
 // Custom VCP input values for previous/next
+#define VCP_INPUT_HOME              0x00
 #define VCP_INPUT_PREVIOUS          0xfe
 #define VCP_INPUT_NEXT              0xff
 
@@ -81,4 +75,3 @@ enum {
 };
 
 extern void logger(const char* format, ...);
-extern struct tray tray;
