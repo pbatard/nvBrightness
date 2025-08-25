@@ -38,6 +38,10 @@
 
 #include "nvDisplay.hpp"
 
+using namespace std::chrono;
+
+#pragma comment(lib, "synchronization.lib")
+
 // Calculates a Gamma Ramp value, for a specific color, at an index in range [0-1023], for
 // use with NvAPI_DISP_SetTargetGammaCorrection() in the same way nVidia does.
 static NvF32 CalculateGamma(NvS32 index, NvF32 brightness, NvF32 contrast, NvF32 gamma)
@@ -64,10 +68,17 @@ static NvF32 CalculateGamma(NvS32 index, NvF32 brightness, NvF32 contrast, NvF32
 }
 
 nvDisplay::nvDisplay(uint32_t display_id)
+:nvMonitor(display_id)
 {
 	this->display_id = display_id;
-	logger("Detected nVidia display 0x%08x with LUID %u\n", display_id, GetLuid());
-	InitializeMonitor(display_id);
+
+	logger("Detected '%S'", device_name[0] != 0 ? device_name : L"Unknown");
+	if (home_input != 0)
+		logger(" using input %s\n", InputToString(home_input));
+	else
+		logger("\n");
+	logger("nVidia display ID: 0x%08x, nVidia LUID: %u\n", display_id, GetLuid());
+
 	// Retrieve the list of LUIDs we have found to be associated with this display.
 	wchar_t* multi_sz = ReadRegistryKeyMultiStr(HKEY_CURRENT_USER, format(L"NVID_{:#08x}", display_id).c_str());
 	const wchar_t* p = multi_sz;
@@ -76,16 +87,43 @@ nvDisplay::nvDisplay(uint32_t display_id)
 		p += wcslen(p) + 1;
 	}
 	LoadColorSettings();
+	detect_luid_task = async(launch::async, &nvDisplay::DetectLuid, this);
+}
+
+// The nVidia driver is crap when it comes to re-applying color settings on display update
+// because it can apply them before the display is fully ready, especially if a display uses
+// HDR or Dolby-Vision. This can result in the display jumping to 100% brightness if you
+// happen to turn your eARC amp on or off. We compensate for that by having our own thread
+// that detects LUID updates, and that applies the gamma settings with a sensible delay.
+void nvDisplay::DetectLuid()
+{
+	atomic<bool> false_value = false;
+	uint32_t last_luid = GetLuid();
+
+	// Of course, this would be much nicer if C++ had wait_until() on std::atomics, which
+	// is such a BASIC synchronisation feature that one would have expected not to take
+	// 15 bloody years (and counting) to be implemented. Or do you expect me to use a
+	// conditional_variable WITH ITS COMPLETELY UNWARRANTED MUTEX with a stupid boolean?
+	// And don't get me started on std::thread::join() which is a FUCKING LIE when invoked
+	// from a destructor!! C++ thread synchronisation is a joke...
+	while (!WaitOnAddress(&stop_detect_luid_task, &false_value, sizeof(atomic<bool>), 1000)
+		&& GetLastError() == ERROR_TIMEOUT) {
+		uint32_t cur_luid = GetLuid();
+		if (cur_luid != 0 && cur_luid != last_luid) {
+			last_luid = cur_luid;
+			logger("DISPLAY HAS CHANGED LUID: %u\n", last_luid);
+			Sleep(1000);
+			UpdateGamma();
+		}
+	}
 }
 
 uint32_t nvDisplay::GetLuid()
 {
 	GUID guid = { 0 };
 	NvAPI_Status r = NvAPI_SYS_GetLUIDFromDisplayID(display_id, 1, &guid);
-	if (r != NVAPI_OK) {
-		logger("NvAPI_SYS_GetLUIDFromDisplayID(0x%08x): %d %s\n", display_id, r, NvAPI_GetErrorString(r));
+	if (r != NVAPI_OK)
 		return 0;
-	}
 	// The part we are after is the second DWORD of the GUID, XOR'd with 0xF00000000
 	return ((uint32_t*)&guid)[1] ^ 0xf0000000;
 }
@@ -114,6 +152,8 @@ bool nvDisplay::UpdateGamma()
 	NV_GAMMA_CORRECTION_EX gamma_correction;
 	NvAPI_Status r;
 
+	// The mutex is likely not needed but it can't hurt...
+	apply_gamma_mutex.lock();
 	gamma_correction.version = NVGAMMA_CORRECTION_EX_VER;
 	gamma_correction.unknown = 1;
 
@@ -132,7 +172,8 @@ bool nvDisplay::UpdateGamma()
 	if (r != NVAPI_OK)
 		logger("NvAPI_DISP_SetTargetGammaCorrection failed for display 0x%08x: %d %s\n", display_id, r, NvAPI_GetErrorString(r));
 
-	return r == NVAPI_OK;
+	apply_gamma_mutex.unlock();
+	return (r == NVAPI_OK);
 }
 
 void nvDisplay::LoadColorSettings()

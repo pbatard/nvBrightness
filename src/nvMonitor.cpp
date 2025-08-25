@@ -92,10 +92,7 @@ const char* nvMonitor::InputToString(uint8_t input)
 	}
 };
 
-// Ideally, this would be the constructor method, but because C++ is dumb when it comes to
-// passing the correct instance of an object, when starting a thread from the constructor
-// of an object that isn't the default constructor, we have to use a different method.
-void nvMonitor::InitializeMonitor(uint32_t display_id)
+nvMonitor::nvMonitor(uint32_t display_id)
 {
 	NvAPI_Status r;
 	NvAPI_ShortString nv_display_name;
@@ -147,6 +144,7 @@ void nvMonitor::InitializeMonitor(uint32_t display_id)
 						},
 						reinterpret_cast<LPARAM>(this));
 					if (b && monitor_handle != NULL) {
+						wcscpy_s(device_name, ARRAYSIZE(device_name), monitor_device.DeviceString);
 						wcscpy_s(device_id, ARRAYSIZE(device_id), monitor_device.DeviceID);
 						goto have_physical_handle;
 					}
@@ -181,7 +179,6 @@ have_physical_handle:
 		if (home_input != 0) {
 			// If we could read the current input, we assume that VCP is supported
 			supports_vcp = true;
-			logger("Current monitor input: %s\n", InputToString(home_input));
 			// Start a an asynchronous task to get this monitor's available inputs
 			allowed_inputs_task = async(launch::async, &nvMonitor::GetAllowedInputs, this);
 		}

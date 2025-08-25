@@ -23,6 +23,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <string>
+#include <future>
 #include <set>
 
 #include "nvBrightness.h"
@@ -34,8 +35,14 @@ class nvDisplay : public nvMonitor {
 	uint32_t display_id;
 	set<uint32_t> luids;
 	float color_setting[nvAttrMax][nvColorMax];
+	atomic<bool> stop_detect_luid_task = false;
+	future<void> detect_luid_task;
+	mutex apply_gamma_mutex;
+	void DetectLuid();
+	void GetFriendlyDisplayName();
 public:
 	nvDisplay(uint32_t);
+	~nvDisplay() { stop_detect_luid_task = true; detect_luid_task.get(); };
 	uint32_t GetLuid();
 	bool UpdateGamma();
 	void ChangeBrightness(float);

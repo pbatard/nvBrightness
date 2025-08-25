@@ -37,21 +37,24 @@
 using namespace std;
 
 class nvMonitor {
+private:
 	HMONITOR monitor_handle = NULL;
-	wchar_t display_name[sizeof(NvAPI_ShortString)] = { 0 };
-	wchar_t device_id[128] = { 0 };
 	vector<PHYSICAL_MONITOR> physical_monitors;
 	vector<uint8_t> allowed_inputs;
-	uint8_t home_input = 0;
 	string model_name = "Unknown";
 	bool supports_vcp = false;
 	bool cancel_allowed_inputs_task = false;
 	future<void> allowed_inputs_task;
 	void GetAllowedInputs();
+protected:
+	uint8_t home_input = 0;
+	wchar_t display_name[sizeof(NvAPI_ShortString)] = { 0 };
+	wchar_t device_id[128] = { 0 };
+	wchar_t device_name[128] = { 0 };
 public:
 	static const char* InputToString(uint8_t input);
+	nvMonitor(uint32_t);
 	~nvMonitor();
-	void InitializeMonitor(uint32_t);
 	uint8_t GetHomeInput() const { return home_input; };
 	void SaveHomeInput() { home_input = GetMonitorInput(); };
 	uint8_t GetMonitorInput();
