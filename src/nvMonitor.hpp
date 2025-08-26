@@ -41,7 +41,7 @@ private:
 	HMONITOR monitor_handle = NULL;
 	vector<PHYSICAL_MONITOR> physical_monitors;
 	vector<uint8_t> allowed_inputs;
-	string model_name = "Unknown";
+	string monitor_name = "Unknown";
 	bool supports_vcp = false;
 	bool cancel_allowed_inputs_task = false;
 	future<void> allowed_inputs_task;
@@ -61,4 +61,5 @@ public:
 	uint8_t SetMonitorInput(uint8_t);
 	PHYSICAL_MONITOR* GetFirstPhysicalMonitor() { return (physical_monitors.size() == 0) ? NULL : &physical_monitors[0]; };
 	bool SupportsVCP() { return supports_vcp; };
+	size_t GetNumberOfInputs() { return allowed_inputs.size(); };
 };

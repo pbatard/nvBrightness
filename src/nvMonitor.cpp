@@ -100,12 +100,6 @@ nvMonitor::nvMonitor(uint32_t display_id)
 	DWORD num_physical_monitors;
 	DISPLAY_DEVICE display_device{ .cb = sizeof(DISPLAY_DEVICE) }, monitor_device{ .cb = sizeof(DISPLAY_DEVICE) };
 
-	// Finish initializing our instance
-	monitor_handle = NULL;
-	home_input = 0;
-	memset(display_name, 0, sizeof(display_name));
-	memset(device_id, 0, sizeof(device_id));
-
 	// Get the Windows display name
 	r = NvAPI_DISP_GetDisplayHandleFromDisplayId(display_id, &display_handle);
 	if (r != NVAPI_OK) {
@@ -136,11 +130,9 @@ nvMonitor::nvMonitor(uint32_t display_id)
 							MONITORINFOEX monitor_info;
 							monitor_info.cbSize = sizeof(monitor_info);
 							if (GetMonitorInfo(monitor_handle, &monitor_info) &&
-								_wcsicmp(monitor_info.szDevice, monitor_data.display_name) == 0) {
+								_wcsicmp(monitor_info.szDevice, monitor_data.display_name) == 0)
 								monitor_data.monitor_handle = monitor_handle;
-								return TRUE;
-							}
-							return FALSE;
+							return TRUE;
 						},
 						reinterpret_cast<LPARAM>(this));
 					if (b && monitor_handle != NULL) {
@@ -189,7 +181,8 @@ nvMonitor::~nvMonitor()
 {
 	cancel_allowed_inputs_task = true;
 	// Wait for the GetAllowedInputs() task to finish
-	allowed_inputs_task.get();
+	if (allowed_inputs_task.valid())
+		allowed_inputs_task.get();
 	DestroyPhysicalMonitors((DWORD)physical_monitors.size(), physical_monitors.data());
 }
 
@@ -211,7 +204,7 @@ void nvMonitor::GetAllowedInputs()
 			return;
 		auto elapsed = duration_cast<seconds>(steady_clock::now() - begin);
 		if (elapsed.count() > VCP_CAPS_MAX_RETRY_TIME) {
-			logger("failed to get VCP capabilities after %d attempts: %x\n", i, GetLastError());
+			logger("failed to get VCP capabilities for %s after %d attempts: %x\n", display_name, i, GetLastError());
 			return;
 		}
 	}
@@ -227,14 +220,12 @@ void nvMonitor::GetAllowedInputs()
 			goto out;
 		string capabilities = capabilities_string;
 		auto elapsed = duration_cast<milliseconds>(steady_clock::now() - begin);
-		logger("Retrieved monitor VCP capabilities in %u.%03u seconds (%d %s)\n",
-			(unsigned)(elapsed.count() / 1000), (unsigned)(elapsed.count() % 1000), i, (i == 1) ? "try" : "tries");
 
 		// Get the model name while we're here
 		regex model_regex(R"(model\(([^)]+)\))");
 		smatch match;
 		if (regex_search(capabilities, match, model_regex))
-			model_name = match[1];
+			monitor_name = match[1];
 
 		// Get the allowed inputs for VCP code 0x60
 		regex inputs_regex(R"(60\(([^)]*)\))");
@@ -249,23 +240,26 @@ void nvMonitor::GetAllowedInputs()
 				}
 			}
 		}
-		// No points in allowing input switching if there's only one
-		if (allowed_inputs.size() > 1 && !cancel_allowed_inputs_task) {
-			// Now, the problem with Windows hot keys is that they are registered for a specific
-			// thread rather than globally. Which means that if we just call RegisterHotKeys()
-			// from this thread, we are going to have an issue.
-			// Long story short, we simulate a fake hotkey press, to re-register the hotkeys.
-			tray_simulate_hottkey(hkRegisterHotkeys);
-		}
+
+
+		// Oh, and you'd think *serious* display manufacturers, like Dell, would
+		// report available inputs in the proper order. But you'd think wrong...
+		stable_sort(allowed_inputs.begin(), allowed_inputs.end());
+
+		if (!cancel_allowed_inputs_task)
+			tray_simulate_hottkey(hkUpdateSubmenu);
 
 		string separator, inputs;
 		for (const auto& input : allowed_inputs) {
 			inputs += separator + InputToString(input);
 			separator = ", ";
 		}
-		logger("%s valid input(s): %s\n", model_name.c_str(), inputs.c_str());
+		logger("Retrieved %S %s VCP capabilities in %u.%03u seconds (%d %s)\n", display_name, monitor_name.c_str(),
+			(unsigned)(elapsed.count() / 1000), (unsigned)(elapsed.count() % 1000), i, (i == 1) ? "try" : "tries");
+		logger("Valid input(s): %s\n", inputs.c_str());
+
 	} else {
-		logger("Could not get monitor VCP capabilities: %x\n", GetLastError());
+		logger("Could not get VCP capabilities for %S: %x\n", display_name, GetLastError());
 	}
 
 out:
@@ -274,6 +268,9 @@ out:
 
 uint8_t nvMonitor::GetMonitorInput()
 {
+	if (!supports_vcp)
+		return 0;
+
 	DWORD current = 0, max = 0;
 	auto physical_monitor = GetFirstPhysicalMonitor();
 	if (physical_monitor == NULL)
@@ -294,6 +291,9 @@ uint8_t nvMonitor::GetMonitorInput()
 
 uint8_t nvMonitor::SetMonitorInput(uint8_t requested)
 {
+	if (!supports_vcp)
+		return 0;
+
 	uint8_t ret = 0, current = GetMonitorInput();
 
 	auto physical_monitor = GetFirstPhysicalMonitor();

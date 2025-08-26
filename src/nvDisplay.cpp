@@ -71,8 +71,10 @@ nvDisplay::nvDisplay(uint32_t display_id)
 :nvMonitor(display_id)
 {
 	this->display_id = display_id;
+	GetFriendlyDisplayName();
 
-	logger("Detected '%S'", device_name[0] != 0 ? device_name : L"Unknown");
+	// TODO: Do we want to report the GPU name/number and GPU output port here as well?
+	logger("Detected '%S' [%S]", device_name[0] != 0 ? device_name : L"Unknown", display_name);
 	if (home_input != 0)
 		logger(" using input %s\n", InputToString(home_input));
 	else
@@ -88,6 +90,48 @@ nvDisplay::nvDisplay(uint32_t display_id)
 	}
 	LoadColorSettings();
 	detect_luid_task = async(launch::async, &nvDisplay::DetectLuid, this);
+}
+
+void nvDisplay::GetFriendlyDisplayName()
+{
+	DISPLAY_DEVICE dd = { .cb = sizeof(dd) };
+
+	for (int i = 0; EnumDisplayDevices(NULL, i, &dd, 0); i++) {
+		DISPLAY_DEVICE dd_monitor = { .cb = sizeof(dd_monitor) };
+
+		if (!EnumDisplayDevices(dd.DeviceName, 0, &dd_monitor, 0))
+			continue;
+
+		UINT32 path_count, mode_count;
+
+		if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count) != ERROR_SUCCESS)
+			continue;
+
+		DISPLAYCONFIG_PATH_INFO* paths = (DISPLAYCONFIG_PATH_INFO*)malloc(sizeof(DISPLAYCONFIG_PATH_INFO) * path_count);
+		DISPLAYCONFIG_MODE_INFO* modes = (DISPLAYCONFIG_MODE_INFO*)malloc(sizeof(DISPLAYCONFIG_MODE_INFO) * mode_count);
+
+		if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths, &mode_count, modes, NULL) != ERROR_SUCCESS)
+			continue;
+
+		for (UINT32 p = 0; p < path_count; p++) {
+			DISPLAYCONFIG_TARGET_DEVICE_NAME targetName;
+			memset(&targetName, 0, sizeof(targetName));
+			targetName.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+			targetName.header.size = sizeof(targetName);
+			targetName.header.adapterId = paths[p].targetInfo.adapterId;
+			targetName.header.id = paths[p].targetInfo.id;
+
+			if (DisplayConfigGetDeviceInfo((DISPLAYCONFIG_DEVICE_INFO_HEADER*)&targetName) == ERROR_SUCCESS) {
+				if (wcsstr(targetName.monitorDevicePath, device_id) != NULL) {
+					wcscpy_s(display_name, 64, targetName.monitorFriendlyDeviceName);
+					break;
+				}
+			}
+		}
+
+		free(paths);
+		free(modes);
+	}
 }
 
 // The nVidia driver is crap when it comes to re-applying color settings on display update
@@ -111,7 +155,7 @@ void nvDisplay::DetectLuid()
 		uint32_t cur_luid = GetLuid();
 		if (cur_luid != 0 && cur_luid != last_luid) {
 			last_luid = cur_luid;
-			logger("DISPLAY HAS CHANGED LUID: %u\n", last_luid);
+			logger("Display %S switched to LUID: %u\n", display_name, last_luid);
 			Sleep(1000);
 			UpdateGamma();
 		}
@@ -186,7 +230,7 @@ void nvDisplay::LoadColorSettings()
 			color_setting[i / 3][i % 3] = 100.0f;
 	} else {
 		for (auto i = 0; i < 9; i++) {
-			swprintf_s(reg_color_key_str, ARRAYSIZE(reg_color_key_str),
+			_snwprintf_s(reg_color_key_str, ARRAYSIZE(reg_color_key_str), _TRUNCATE,
 				L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices\\%u-0\\Color\\%u",
 				luid, NV_COLOR_REGISTRY_INDEX + i);
 			color_setting[i / 3][i % 3] = (float)ReadRegistryKey32(HKEY_CURRENT_USER, reg_color_key_str);
@@ -220,13 +264,13 @@ void nvDisplay::SaveColorSettings()
 	// Update all the LUIDs known for this display
 	for (auto& luid : luids) {
 		for (auto i = 0; i < 9; i++) {
-			swprintf_s(reg_color_key_str, ARRAYSIZE(reg_color_key_str),
+			_snwprintf_s(reg_color_key_str, ARRAYSIZE(reg_color_key_str), _TRUNCATE,
 				L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices\\%u-0\\Color\\%u",
 				luid, NV_COLOR_REGISTRY_INDEX + i);
 			WriteRegistryKey32(HKEY_CURRENT_USER, reg_color_key_str, (uint32_t)color_setting[i / 3][i % 3]);
 		}
 		// Add the NvCplGammaSet key to indicate that Gamma should be restored by the nVidia driver
-		swprintf_s(reg_color_key_str, ARRAYSIZE(reg_color_key_str),
+		_snwprintf_s(reg_color_key_str, ARRAYSIZE(reg_color_key_str), _TRUNCATE,
 			L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices\\%u-0\\Color\\NvCplGammaSet", luid);
 		WriteRegistryKey32(HKEY_CURRENT_USER, reg_color_key_str, 1);
 	}

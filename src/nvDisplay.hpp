@@ -33,6 +33,7 @@ using namespace std;
 
 class nvDisplay : public nvMonitor {
 	uint32_t display_id;
+	wchar_t display_name[64] = L"Unknown";
 	set<uint32_t> luids;
 	float color_setting[nvAttrMax][nvColorMax];
 	atomic<bool> stop_detect_luid_task = false;
@@ -42,8 +43,9 @@ class nvDisplay : public nvMonitor {
 	void GetFriendlyDisplayName();
 public:
 	nvDisplay(uint32_t);
-	~nvDisplay() { stop_detect_luid_task = true; detect_luid_task.get(); };
+	~nvDisplay() { stop_detect_luid_task = true; if (detect_luid_task.valid()) detect_luid_task.get(); };
 	uint32_t GetLuid();
+	wchar_t* GetDisplayName() { return display_name; };
 	bool UpdateGamma();
 	void ChangeBrightness(float);
 	float GetBrightness();

@@ -70,7 +70,9 @@ enum {
 	hkRestoreInput,
 	hkPreviousInput,
 	hkNextInput,
-	hkRegisterHotkeys,
+	hkPreviousMonitor,
+	hkNextMonitor,
+	hkUpdateSubmenu,
 	hkMax
 };
 
