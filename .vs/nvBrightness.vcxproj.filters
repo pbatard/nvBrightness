@@ -47,6 +47,9 @@
     <ClInclude Include="..\src\nvDisplay.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\vendors.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="..\src\nvBrightness.manifest">

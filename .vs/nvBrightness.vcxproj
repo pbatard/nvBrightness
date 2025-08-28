@@ -238,6 +238,7 @@
     <ClInclude Include="..\src\nvBrightness.h" />
     <ClInclude Include="..\src\registry.h" />
     <ClInclude Include="..\src\tray.h" />
+    <ClInclude Include="..\src\vendors.hpp" />
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="..\src\nvBrightness.manifest" />

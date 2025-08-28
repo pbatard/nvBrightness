@@ -71,14 +71,16 @@ nvDisplay::nvDisplay(uint32_t display_id)
 :nvMonitor(display_id)
 {
 	this->display_id = display_id;
-	GetFriendlyDisplayName();
+	PopulateDisplayName();
 
 	// TODO: Do we want to report the GPU name/number and GPU output port here as well?
-	logger("Detected '%S' [%S]", device_name[0] != 0 ? device_name : L"Unknown", display_name);
+	logger("Detected '%S' [%S]", display_name.data(), device_name[0] != 0 ? device_name : L"Unknown");
 	if (home_input != 0)
 		logger(" using input %s\n", InputToString(home_input));
 	else
 		logger("\n");
+	if (product_code != 0)
+		logger("Product Code: 0x%04X, S/N: %s, Manufactured: %s\n", product_code, serial_number.c_str(), mfg_date.c_str());
 	logger("nVidia display ID: 0x%08x, nVidia LUID: %u\n", display_id, GetLuid());
 
 	// Retrieve the list of LUIDs we have found to be associated with this display.
@@ -92,10 +94,21 @@ nvDisplay::nvDisplay(uint32_t display_id)
 	detect_luid_task = async(launch::async, &nvDisplay::DetectLuid, this);
 }
 
-void nvDisplay::GetFriendlyDisplayName()
+void nvDisplay::PopulateDisplayName()
 {
-	DISPLAY_DEVICE dd = { .cb = sizeof(dd) };
+	// If we got data from the EDID, just build the name from it and return
+	if (model_name != "" && vendor_name != "") {
+		for (char c : vendor_name)
+			display_name.push_back(c);
+		display_name.push_back(L' ');
+		for (char c : model_name)
+			display_name.push_back(c);
+		display_name.push_back(L'\0');
+		return;
+	}
 
+	// No data from the EDID => use DisplayConfigGetDeviceInfo()
+	DISPLAY_DEVICE dd = { .cb = sizeof(dd) };
 	for (int i = 0; EnumDisplayDevices(NULL, i, &dd, 0); i++) {
 		DISPLAY_DEVICE dd_monitor = { .cb = sizeof(dd_monitor) };
 
@@ -123,7 +136,8 @@ void nvDisplay::GetFriendlyDisplayName()
 
 			if (DisplayConfigGetDeviceInfo((DISPLAYCONFIG_DEVICE_INFO_HEADER*)&targetName) == ERROR_SUCCESS) {
 				if (wcsstr(targetName.monitorDevicePath, device_id) != NULL) {
-					wcscpy_s(display_name, 64, targetName.monitorFriendlyDeviceName);
+					display_name = vector<wchar_t>(targetName.monitorFriendlyDeviceName,
+						targetName.monitorFriendlyDeviceName + 64);
 					break;
 				}
 			}
@@ -131,6 +145,11 @@ void nvDisplay::GetFriendlyDisplayName()
 
 		free(paths);
 		free(modes);
+	}
+
+	if (display_name.empty()) {
+		display_name.resize(8);
+		memcpy(display_name.data(), "Unknown", 8 * sizeof(wchar_t));
 	}
 }
 

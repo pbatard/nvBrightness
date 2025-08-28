@@ -30,10 +30,13 @@
 
 #include "tray.h"
 #include "nvapi.h"
+#include "registry.h"
 #include "nvBrightness.h"
 #include "nvMonitor.hpp"
+#include "vendors.hpp"
 
 #include <regex>
+#include <format>
 #include <sstream>
 
 #pragma comment(lib, "dxva2.lib")
@@ -163,7 +166,7 @@ have_physical_handle:
 			auto elapsed = duration_cast<milliseconds>(steady_clock::now() - begin);
 			if (elapsed.count() > VCP_FEATURE_MAX_RETRY_TIME) {
 				logger("Could not retrieve monitor input: error 0x%X\n", GetLastError());
-				return;
+				goto parse_edid;
 			}
 		}
 		// Store the "home" input, i.e. the input the monitor was using when we started the app
@@ -175,6 +178,9 @@ have_physical_handle:
 			allowed_inputs_task = async(launch::async, &nvMonitor::GetAllowedInputs, this);
 		}
 	}
+
+parse_edid:
+	ParseEdid();
 }
 
 nvMonitor::~nvMonitor()
@@ -184,6 +190,77 @@ nvMonitor::~nvMonitor()
 	if (allowed_inputs_task.valid())
 		allowed_inputs_task.get();
 	DestroyPhysicalMonitors((DWORD)physical_monitors.size(), physical_monitors.data());
+}
+
+bool nvMonitor::ParseEdid()
+{
+	size_t k, edid_size;
+	wchar_t edid_registry_path[150] = L"SYSTEM\\CurrentControlSet\\Enum";
+
+	// We *could* do the whole SetupDi enumeration & lookup dance... Or we can just craft
+	// the registry path for the EDID ourselves, since it amounts to the same thing.
+	wcscat_s(edid_registry_path, ARRAYSIZE(edid_registry_path), &device_id[3]);
+	for (k = wcslen(edid_registry_path); k > 0 && edid_registry_path[k] != L'#'; k--);
+	edid_registry_path[k] = L'\0';
+	wcscat_s(edid_registry_path, ARRAYSIZE(edid_registry_path), L"\\Device Parameters\\EDID");
+	for (k = 0; k < wcslen(edid_registry_path); k++)
+		if (edid_registry_path[k] == L'#')
+			edid_registry_path[k] = L'\\';
+	edid_size = (size_t)GetRegistryKeySize(HKEY_LOCAL_MACHINE, edid_registry_path, REG_BINARY);
+	if (edid_size == 0) {
+		logger("Failed to read EDID for %S\n", device_id);
+		return false;
+	}
+	uint8_t* edid = (uint8_t*)malloc(edid_size);
+	if (edid == NULL || !GetRegistryKey(HKEY_LOCAL_MACHINE, edid_registry_path, REG_BINARY, edid, (DWORD)edid_size))
+		return false;
+	char model[14] = "", serial[14] = "";
+	vendor_code = (edid[8] << 8) | edid[9];	// Big endian
+	product_code = ((uint16_t*)edid)[5];		// Little endian. Great consistency there!
+	serial_number = format("{:08x}", ((uint32_t*)edid)[3]);
+	// If the serial is alphanum, print it as alphanum (little endian, which is what Dell uses)
+	if (isalnum(edid[12]) && isalnum(edid[13]) && isalnum(edid[14]) && isalnum(edid[15]))
+		serial_number = format("{:c}{:c}{:c}{:c}", edid[15], edid[14], edid[13], edid[12]);
+	mfg_date = format("{:d}", edid[17] + 1990);
+	if (edid[16] != 0)
+		mfg_date += format("Q{:d}", (edid[16] / 13) + 1);
+
+	for (auto i = 0; i < 4; i++) {
+		// EDID detailed timing descriptors start at offset 54, four blocks of 18 bytes
+		const uint8_t* desc = edid + 54 + i * 18;
+		if (desc[0] != 0x00 || desc[1] != 0x00 || desc[2] != 0x00)
+			continue;
+		switch (desc[3]) {
+		case 0xfc:
+			memcpy(model, desc + 5, 13);
+			model[13] = '\0';
+			for (auto j = strlen(model) - 1; j >= 0 && isspace((unsigned char)model[j]); j--)
+				model[j] = '\0';
+			break;
+		case 0xff:
+			memcpy(serial, desc + 5, 13);
+			serial[13] = '\0';
+			for (auto j = (int)strlen(serial) - 1; j >= 0 && isspace((unsigned char)serial[j]); j--)
+				serial[j] = '\0';
+			serial_number += "/";
+			serial_number += serial;
+			break;
+		default:
+			break;
+		}
+	}
+
+	vendor_name = GetVendorName(vendor_code);
+	string test_str = vendor_name + " ";
+	// Some manufacturers (Dell yet again) inconstently prefix or don't prefix
+	// their name into the model string. If that's the case, remove it.
+	if (_strnicmp(model, test_str.c_str(), test_str.size()) == 0)
+		model_name = &model[test_str.size()];
+	else
+		model_name = model;
+
+	free(edid);
+	return true;
 }
 
 // Issuing CapabilitiesRequestAndCapabilitiesReply() can be a lengthy process and may need
@@ -224,8 +301,8 @@ void nvMonitor::GetAllowedInputs()
 		// Get the model name while we're here
 		regex model_regex(R"(model\(([^)]+)\))");
 		smatch match;
-		if (regex_search(capabilities, match, model_regex))
-			monitor_name = match[1];
+		if (model_name == "" && regex_search(capabilities, match, model_regex))
+			model_name = match[1];
 
 		// Get the allowed inputs for VCP code 0x60
 		regex inputs_regex(R"(60\(([^)]*)\))");
@@ -254,7 +331,7 @@ void nvMonitor::GetAllowedInputs()
 			inputs += separator + InputToString(input);
 			separator = ", ";
 		}
-		logger("Retrieved %S %s VCP capabilities in %u.%03u seconds (%d %s)\n", display_name, monitor_name.c_str(),
+		logger("Retrieved %S %s VCP capabilities in %u.%03u seconds (%d %s)\n", display_name, model_name.c_str(),
 			(unsigned)(elapsed.count() / 1000), (unsigned)(elapsed.count() % 1000), i, (i == 1) ? "try" : "tries");
 		logger("Valid input(s): %s\n", inputs.c_str());
 

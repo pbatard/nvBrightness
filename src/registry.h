@@ -31,26 +31,24 @@ extern wchar_t *APPLICATION_NAME, *COMPANY_NAME;
  * Read a generic registry key value. If a short key_name is used, assume that
  * it belongs to the application and create the app subkey if required
  */
-static __inline BOOL _GetRegistryKey(HKEY key_root, const wchar_t* key_name, DWORD reg_type,
+static __inline DWORD GetRegistryKey(HKEY key_root, const wchar_t* key_name, DWORD reg_type,
 	LPBYTE dest, DWORD dest_size)
 {
 	wchar_t long_key_name[MAX_PATH] = { 0 };
-	BOOL r = FALSE;
+	DWORD r = 0;
 	size_t i;
 	LONG s;
 	HKEY hSoftware = NULL, hApp = NULL;
 	DWORD dwDisp, dwType = -1, dwSize = dest_size;
 
-	memset(dest, 0, dest_size);
+	if (dest != NULL)
+		memset(dest, 0, dest_size);
 
 	if (key_name == NULL || COMPANY_NAME == NULL || COMPANY_NAME[0] == L'\0' ||
 		APPLICATION_NAME == NULL || APPLICATION_NAME[0] == L'\0')
-		return FALSE;
+		return 0;
 
-	for (i = wcslen(key_name); i > 0; i--) {
-		if (key_name[i] == '\\')
-			break;
-	}
+	for (i = wcslen(key_name); i > 0 && key_name[i] != L'\\'; i--);
 
 	if (i > 0) {
 		if (i >= ARRAYSIZE(long_key_name))
@@ -78,9 +76,8 @@ static __inline BOOL _GetRegistryKey(HKEY key_root, const wchar_t* key_name, DWO
 
 	s = RegQueryValueEx(hApp, &key_name[i], NULL, &dwType, (LPBYTE)dest, &dwSize);
 	// No key means default value of 0 or empty string
-	if ((s == ERROR_FILE_NOT_FOUND) || ((s == ERROR_SUCCESS) && (dwType == reg_type) && (dwSize > 0))) {
-		r = TRUE;
-	}
+	if ((s == ERROR_FILE_NOT_FOUND) || ((s == ERROR_SUCCESS) && (dwType == reg_type)))
+		r = dwSize;
 out:
 	if (hSoftware != NULL)
 		RegCloseKey(hSoftware);
@@ -88,9 +85,10 @@ out:
 		RegCloseKey(hApp);
 	return r;
 }
+#define GetRegistryKeySize(root, key, type) GetRegistryKey(root, key, type, NULL, 0)
 
 /* Write a generic registry key value (create the key if it doesn't exist) */
-static __inline BOOL _SetRegistryKey(HKEY key_root, const wchar_t* key_name, DWORD reg_type, LPBYTE src, DWORD src_size)
+static __inline BOOL SetRegistryKey(HKEY key_root, const wchar_t* key_name, DWORD reg_type, LPBYTE src, DWORD src_size)
 {
 	wchar_t long_key_name[MAX_PATH] = { 0 };
 	BOOL r = FALSE;
@@ -105,10 +103,7 @@ static __inline BOOL _SetRegistryKey(HKEY key_root, const wchar_t* key_name, DWO
 	if (key_root == NULL || key_root != HKEY_CURRENT_USER)
 		return FALSE;
 
-	for (i = wcslen(key_name); i > 0; i--) {
-		if (key_name[i] == '\\')
-			break;
-	}
+	for (i = wcslen(key_name); i > 0 && key_name[i] != L'\\'; i--);
 
 	if (i > 0) {
 		if (i >= ARRAYSIZE(long_key_name))
@@ -158,10 +153,7 @@ static __inline BOOL DeleteRegistryValue(HKEY key_root, const wchar_t* key_name)
 	if (key_root != HKEY_CURRENT_USER)
 		return FALSE;
 
-	for (i = wcslen(key_name); i > 0; i--) {
-		if (key_name[i] == '\\')
-			break;
-	}
+	for (i = wcslen(key_name); i > 0 && key_name[i] != L'\\'; i--);
 
 	if (i > 0) {
 		if (i >= ARRAYSIZE(long_key_name))
@@ -192,8 +184,8 @@ out:
 }
 
 /* Helpers for 64 bit registry operations */
-#define GetRegistryKey64(root, key, pval) _GetRegistryKey(root, key, REG_QWORD, (LPBYTE)pval, sizeof(LONGLONG))
-#define SetRegistryKey64(root, key, val) _SetRegistryKey(root, key, REG_QWORD, (LPBYTE)&val, sizeof(LONGLONG))
+#define GetRegistryKey64(root, key, pval) GetRegistryKey(root, key, REG_QWORD, (LPBYTE)pval, sizeof(LONGLONG))
+#define SetRegistryKey64(root, key, val) SetRegistryKey(root, key, REG_QWORD, (LPBYTE)&val, sizeof(LONGLONG))
 // Check that a key is accessible for R/W (will create a key if not already existing)
 static __inline BOOL CheckRegistryKey64(HKEY root, const wchar_t* key) {
 	LONGLONG val;
@@ -210,8 +202,8 @@ static __inline BOOL WriteRegistryKey64(HKEY root, const wchar_t* key, int64_t v
 }
 
 /* Helpers for 32 bit registry operations */
-#define GetRegistryKey32(root, key, pval) _GetRegistryKey(root, key, REG_DWORD, (LPBYTE)pval, sizeof(DWORD))
-#define SetRegistryKey32(root, key, val) _SetRegistryKey(root, key, REG_DWORD, (LPBYTE)&val, sizeof(DWORD))
+#define GetRegistryKey32(root, key, pval) GetRegistryKey(root, key, REG_DWORD, (LPBYTE)pval, sizeof(DWORD))
+#define SetRegistryKey32(root, key, val) SetRegistryKey(root, key, REG_DWORD, (LPBYTE)&val, sizeof(DWORD))
 static __inline BOOL CheckRegistryKey32(HKEY root, const wchar_t* key) {
 	DWORD val;
 	return (GetRegistryKey32(root, key, &val) && SetRegistryKey32(root, key, val));
@@ -232,27 +224,27 @@ static __inline BOOL WriteRegistryKey32(HKEY root, const wchar_t* key, int32_t v
 #define CheckRegistryKeyBool CheckRegistryKey32
 
 /* Helpers for String registry operations */
-#define GetRegistryKeyStr(root, key, str, len) _GetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)len)
-#define SetRegistryKeyStr(root, key, str) _SetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)wcslen(str) * sizeof(WCHAR))
+#define GetRegistryKeyStr(root, key, str, len) GetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)len)
+#define SetRegistryKeyStr(root, key, str) SetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)wcslen(str) * sizeof(WCHAR))
 // Use a static buffer - don't allocate
 static __inline wchar_t* ReadRegistryKeyStr(HKEY root, const wchar_t* key) {
 	static wchar_t str[512 + 1];
 	str[0] = 0;
-	_GetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)sizeof(str));
+	GetRegistryKey(root, key, REG_SZ, (LPBYTE)str, (DWORD)sizeof(str));
 	str[ARRAYSIZE(str) - 1] = 0;
 	return str;
 }
 #define WriteRegistryKeyStr SetRegistryKeyStr
 
 /* Helpers for Multi-String registry operations */
-#define GetRegistryKeyMultiStr(root, key, multi_str, len) _GetRegistryKey(root, key, REG_MULTI_SZ, (LPBYTE)multi_str, (DWORD)len)
-#define SetRegistryKeyMultiStr(root, key, multi_str, len) _SetRegistryKey(root, key, REG_MULTI_SZ, (LPBYTE)multi_str, (DWORD)len)
+#define GetRegistryKeyMultiStr(root, key, multi_str, len) GetRegistryKey(root, key, REG_MULTI_SZ, (LPBYTE)multi_str, (DWORD)len)
+#define SetRegistryKeyMultiStr(root, key, multi_str, len) SetRegistryKey(root, key, REG_MULTI_SZ, (LPBYTE)multi_str, (DWORD)len)
 // Use a static buffer - don't allocate
 static __inline wchar_t* ReadRegistryKeyMultiStr(HKEY root, const wchar_t* key) {
 	static wchar_t multi_str[512 + 2];
 	multi_str[0] = 0;
 	multi_str[1] = 0;
-	_GetRegistryKey(root, key, REG_SZ, (LPBYTE)multi_str, (DWORD)sizeof(multi_str));
+	GetRegistryKey(root, key, REG_SZ, (LPBYTE)multi_str, (DWORD)sizeof(multi_str));
 	multi_str[ARRAYSIZE(multi_str) - 1] = 0;
 	multi_str[ARRAYSIZE(multi_str) - 2] = 0;
 	return multi_str;

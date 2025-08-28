@@ -41,12 +41,17 @@ private:
 	HMONITOR monitor_handle = NULL;
 	vector<PHYSICAL_MONITOR> physical_monitors;
 	vector<uint8_t> allowed_inputs;
-	string monitor_name = "Unknown";
 	bool supports_vcp = false;
 	bool cancel_allowed_inputs_task = false;
 	future<void> allowed_inputs_task;
 	void GetAllowedInputs();
 protected:
+	uint16_t vendor_code = 0;
+	uint16_t product_code = 0;
+	string vendor_name;
+	string model_name;
+	string serial_number;
+	string mfg_date;
 	uint8_t home_input = 0;
 	wchar_t display_name[sizeof(NvAPI_ShortString)] = { 0 };
 	wchar_t device_id[128] = { 0 };
@@ -55,6 +60,7 @@ public:
 	static const char* InputToString(uint8_t input);
 	nvMonitor(uint32_t);
 	~nvMonitor();
+	bool ParseEdid();
 	uint8_t GetHomeInput() const { return home_input; };
 	void SaveHomeInput() { home_input = GetMonitorInput(); };
 	uint8_t GetMonitorInput();

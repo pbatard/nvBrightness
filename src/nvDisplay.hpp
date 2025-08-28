@@ -33,19 +33,19 @@ using namespace std;
 
 class nvDisplay : public nvMonitor {
 	uint32_t display_id;
-	wchar_t display_name[64] = L"Unknown";
+	vector<wchar_t> display_name;
 	set<uint32_t> luids;
 	float color_setting[nvAttrMax][nvColorMax];
 	atomic<bool> stop_detect_luid_task = false;
 	future<void> detect_luid_task;
 	mutex apply_gamma_mutex;
 	void DetectLuid();
-	void GetFriendlyDisplayName();
+	void PopulateDisplayName();
 public:
 	nvDisplay(uint32_t);
 	~nvDisplay() { stop_detect_luid_task = true; if (detect_luid_task.valid()) detect_luid_task.get(); };
 	uint32_t GetLuid();
-	wchar_t* GetDisplayName() { return display_name; };
+	wchar_t* GetDisplayName() { return display_name.data(); };
 	bool UpdateGamma();
 	void ChangeBrightness(float);
 	float GetBrightness();
