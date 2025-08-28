@@ -58,40 +58,40 @@ static vector<string> SplitByWhitespace(const string& s)
 const char* nvMonitor::InputToString(uint8_t input)
 {
 	switch (input) {
-	case 0x01: return "VGA 1";
-	case 0x02: return "VGA 2";
-	case 0x03: return "DVI 1";
-	case 0x04: return "DVI 2";
-	case 0x05: return "Composite 1";
-	case 0x06: return "Composite 2";
-	case 0x07: return "S-Video 1";
-	case 0x08: return "S-Video 2";
-	case 0x09: return "Tuner 1";
-	case 0x0a: return "Tuner 2";
-	case 0x0b: return "Tuner 3";
-	case 0x0c: return "Component 1";
-	case 0x0d: return "Component 2";
-	case 0x0e: return "Component 3";
-	case 0x0f: return "DP 1";
-	case 0x10: return "DP 2";
-	case 0x11: return "HDMI 1";
-	case 0x12: return "HDMI 2";
+	case 0x01: return "VGA1";
+	case 0x02: return "VGA2";
+	case 0x03: return "DVI1";
+	case 0x04: return "DVI2";
+	case 0x05: return "Comp1";	// Composite
+	case 0x06: return "Comp2";
+	case 0x07: return "S-Video1";
+	case 0x08: return "S-Video2";
+	case 0x09: return "Tuner1";
+	case 0x0a: return "Tuner2";
+	case 0x0b: return "Tuner3";
+	case 0x0c: return "BNC1";	// Components
+	case 0x0d: return "BNC2";
+	case 0x0e: return "BNC3";
+	case 0x0f: return "DP1";
+	case 0x10: return "DP2";
+	case 0x11: return "HDMI1";
+	case 0x12: return "HDMI2";
 	// Yeah, someone, SOMEWHERE, has this info, but they are hoarding
 	// it to themselves. So have fun dealing with an educated guess,
 	// that's going to pollute the internet forever as it becomes the
 	// prime reference.
 	// That'll teach you NOT to disclose what SHOULD be public data!
-	case 0x13: return "HDMI 3";
-	case 0x14: return "HDMI 4";
-	case 0x15: return "Thunderbolt 1";
-	case 0x16: return "Thunderbolt 2";
-	case 0x17: return "USB-C 1";
-	case 0x18: return "USB-C 2";
-	case 0x19: return "HDMI over USB-C 1";
-	case 0x1a: return "HDMI over USB-C 2";
-	case 0x1b: return "DP over USB-C 1";
-	case 0x1c: return "DP over USB-C 2";
-	default: return "Unknown";
+	case 0x13: return "HDMI3";
+	case 0x14: return "HDMI4";
+	case 0x15: return "TB1";	// Thunderbolt
+	case 0x16: return "TB2";
+	case 0x17: return "USB1";	// USB-C
+	case 0x18: return "USB2";
+	case 0x19: return "UHDMI1";	// HDMI over USB-C
+	case 0x1a: return "UHDMI2";
+	case 0x1b: return "UDP1";	// DisplayPort over USB-C
+	case 0x1c: return "UDP2";
+	default: return "????";
 	}
 };
 
@@ -331,7 +331,7 @@ void nvMonitor::GetAllowedInputs()
 			inputs += separator + InputToString(input);
 			separator = ", ";
 		}
-		logger("Retrieved %S %s VCP capabilities in %u.%03u seconds (%d %s)\n", display_name, model_name.c_str(),
+		logger("Retrieved %S [%s] VCP capabilities in %u.%03u seconds (%d %s)\n", display_name, model_name.c_str(),
 			(unsigned)(elapsed.count() / 1000), (unsigned)(elapsed.count() % 1000), i, (i == 1) ? "try" : "tries");
 		logger("Valid input(s): %s\n", inputs.c_str());
 
@@ -402,4 +402,20 @@ uint8_t nvMonitor::SetMonitorInput(uint8_t requested)
 	}
 
 	return ret;
+}
+
+uint8_t nvMonitor::GetNextInput()
+{
+	auto index = find(allowed_inputs.begin(), allowed_inputs.end(), GetMonitorInput());
+	if (index == allowed_inputs.end())
+		return 0;
+	return allowed_inputs[(index - allowed_inputs.begin() + 1) % allowed_inputs.size()];
+}
+
+uint8_t nvMonitor::GetPrevInput()
+{
+	auto index = find(allowed_inputs.begin(), allowed_inputs.end(), GetMonitorInput());
+	if (index == allowed_inputs.end())
+		return 0;
+	return allowed_inputs[((index - allowed_inputs.begin()) + allowed_inputs.size() - 1) % allowed_inputs.size()];
 }

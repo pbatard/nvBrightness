@@ -86,6 +86,11 @@ static settings_t settings = { true, false, false, false, 0.5f, 0 };
 static vector<struct tray_menu> submenu;
 static struct tray tray = { 0 };
 static list<nvDisplay> display_list;
+// The following string buffers are modified to display the input names
+static wchar_t home_input[64] = L"Home input\t［⊞］［Shift］［Home］";
+static wchar_t next_input[64] = L"Next input\t［⊞］［Shift］［PgUp］";
+static wchar_t prev_input[64] = L"Prev input\t［⊞］［Shift］［PgDn］";
+static wchar_t wake_input[64] = L"Wake up to Home";
 
 // Logging
 void logger(const char* format, ...)
@@ -319,7 +324,8 @@ static void AutoStartCallback(struct tray_menu* item)
 
 	settings.autostart = !settings.autostart;
 	item->checked = !item->checked;
-	_snwprintf_s(key_name, ARRAYSIZE(key_name), _TRUNCATE, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run\\%s", version.ProductName);
+	_snwprintf_s(key_name, ARRAYSIZE(key_name), _TRUNCATE,
+		L"Software\\Microsoft\\Windows\\CurrentVersion\\Run\\%s", version.ProductName);
 	GetModuleFileName(NULL, &exe_path[1], MAX_PATH);
 	// Quote the executable path
 	exe_path[0] = L'"';
@@ -404,7 +410,7 @@ static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
 		if (display_list.size() >= 1) {
 			settings.active_display += display_list.size() + (wparam == hkNextMonitor) ? 1 : -1;
 			settings.active_display %= display_list.size();
-			for (auto i = 1; i <= display_list.size(); i++)
+			for (size_t i = 1; i <= display_list.size(); i++)
 				submenu[i].checked = (i == settings.active_display + 1);
 			WriteRegistryKey32(HKEY_CURRENT_USER, L"ActiveDisplay", settings.active_display);
 			auto& display = GetDisplayAt(settings.active_display);
@@ -425,9 +431,29 @@ static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
 				break;
 			}
 			auto& display = GetDisplayAt(settings.active_display);
+			// Set the enabled/disabled status
 			tray.menu[4].submenu[i - 3].disabled = (display.GetHomeInput() == 0);
 			tray.menu[4].submenu[i - 2].disabled = (display.GetNumberOfInputs() <= 1);
 			tray.menu[4].submenu[i - 1].disabled = (display.GetNumberOfInputs() <= 1);
+			// Update the menu entries to add/remove the input names
+			if (display.GetHomeInput() == 0) {
+				_snwprintf_s(home_input, ARRAYSIZE(home_input), _TRUNCATE, L"Home input\t［⊞］［Shift］［Home］");
+				_snwprintf_s(wake_input, ARRAYSIZE(wake_input), _TRUNCATE, L"Wake up to home");
+			} else {
+				_snwprintf_s(home_input, ARRAYSIZE(home_input), _TRUNCATE,
+					L"Home input  (%hs)\t［⊞］［Shift］［Home］", nvDisplay::InputToString(display.GetHomeInput()));
+				_snwprintf_s(wake_input, ARRAYSIZE(wake_input), _TRUNCATE,
+					L"Wake up to home (%hs)", nvDisplay::InputToString(display.GetHomeInput()));
+			}
+			if (display.GetNumberOfInputs() <= 1) {
+				_snwprintf_s(next_input, ARRAYSIZE(next_input), _TRUNCATE, L"Next input\t［⊞］［Shift］［PgUp］");
+				_snwprintf_s(prev_input, ARRAYSIZE(prev_input), _TRUNCATE, L"Prev input\t［⊞］［Shift］［PgDn］");
+			} else {
+				_snwprintf_s(next_input, ARRAYSIZE(next_input), _TRUNCATE,
+					L"Next input    (%hs)\t［⊞］［Shift］［PgUp］", nvDisplay::InputToString(display.GetNextInput()));
+				_snwprintf_s(prev_input, ARRAYSIZE(prev_input), _TRUNCATE,
+					L"Prev input    (%hs)\t［⊞］［Shift］［PgDn］", nvDisplay::InputToString(display.GetPrevInput()));
+			}
 			tray_update(&tray);
 		}
 		break;
@@ -561,7 +587,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	static wchar_t mutex_name[64];
 	int ret = 1, icon_index = 20, i = 0;
 	wchar_t key_name[128];
-	bool allow_last_known = false;
+	bool enable_home = false;
 	GUID guid = TRAY_ICON_GUID;
 	HANDLE mutex = NULL, power_handle = NULL;
 	DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS power_params;
@@ -609,20 +635,19 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		settings.active_display = 0;
 
 	// Create the Input controls submenu
-	submenu.push_back({ .text = L"Apply shortcuts to:\t［⊞］［Shift］［,］/［.］" });
+	submenu.push_back({ .text = L"Display to apply shortcuts:\t［⊞］［Shift］［,］ / ［.］" });
 	// The active display selection assumes that Windows keeps the display order between sessions
 	for (auto& display : display_list) {
 		submenu.push_back({ .text = display.GetDisplayName(), .checked = (i == settings.active_display),
 			.cb = ActiveDisplayCallback, .context = (void*)(uintptr_t)i });
 		if (i == settings.active_display && display.GetHomeInput() != 0)
-			allow_last_known = true;
+			enable_home = true;
 		i++;
 	}
 	submenu.push_back({ .text = L"-" });
-	submenu.push_back({ .text = L"Last known input\t［⊞］［Shift］［Home］", .disabled = !allow_last_known,
-			.cb = RestoreInputCallback });
-	submenu.push_back({ .text = L"Next input\t［⊞］［Shift］［PgUp］", .disabled = true, });
-	submenu.push_back({ .text = L"Previous input\t［⊞］［Shift］［PgDn］", .disabled = true });
+	submenu.push_back({ .text = home_input, .disabled = !enable_home, .cb = RestoreInputCallback });
+	submenu.push_back({ .text = next_input, .disabled = true, });
+	submenu.push_back({ .text = prev_input, .disabled = true });
 	submenu.push_back({ .text = NULL });
 
 	// Create the main menu
@@ -632,7 +657,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		{ .text = L"No signal\t［⊞］［Shift］［End］", .cb = PowerOffCallback },
 		{ .text = L"-" },
 		{ .text = L"Input controls", .submenu = submenu.data()},
-		{ .text = L"Wake to last known", .disabled = (display_list.front().GetHomeInput() == 0),
+		{ .text = wake_input, .disabled = (display_list.front().GetHomeInput() == 0),
 			.checked = settings.resume_to_last_input, .cb = ResumeToLastInputCallback },
 		{ .text = L"-" },
 		{ .text = L"Auto Start", .checked = settings.autostart, .cb = AutoStartCallback },
