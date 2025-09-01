@@ -35,6 +35,7 @@
 #include <format>
 #include <list>
 #include <numeric>
+#include <cassert>
 
 #include "nvDisplay.hpp"
 
@@ -72,6 +73,7 @@ nvDisplay::nvDisplay(uint32_t display_id)
 {
 	this->display_id = display_id;
 	PopulateDisplayName();
+	active_luid = GetLuid();
 
 	// TODO: Do we want to report the GPU name/number and GPU output port here as well?
 	logger("Detected '%S' [%S]", display_name.data(), device_name[0] != 0 ? device_name : L"Unknown");
@@ -87,11 +89,10 @@ nvDisplay::nvDisplay(uint32_t display_id)
 	wchar_t* multi_sz = ReadRegistryKeyMultiStr(HKEY_CURRENT_USER, format(L"NVID_{:#08x}", display_id).c_str());
 	const wchar_t* p = multi_sz;
 	while (*p != L'\0') {
-		luids.insert(static_cast<uint32_t>(stoul(p)));
+		known_luids.insert(static_cast<uint32_t>(stoul(p)));
 		p += wcslen(p) + 1;
 	}
 	LoadColorSettings();
-	detect_luid_task = async(launch::async, &nvDisplay::DetectLuid, this);
 }
 
 void nvDisplay::PopulateDisplayName()
@@ -123,22 +124,23 @@ void nvDisplay::PopulateDisplayName()
 		DISPLAYCONFIG_PATH_INFO* paths = (DISPLAYCONFIG_PATH_INFO*)malloc(sizeof(DISPLAYCONFIG_PATH_INFO) * path_count);
 		DISPLAYCONFIG_MODE_INFO* modes = (DISPLAYCONFIG_MODE_INFO*)malloc(sizeof(DISPLAYCONFIG_MODE_INFO) * mode_count);
 
-		if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths, &mode_count, modes, NULL) != ERROR_SUCCESS)
-			continue;
+		if (paths != NULL && modes != NULL &&
+			QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths, &mode_count, modes, NULL) == ERROR_SUCCESS) {
 
-		for (UINT32 p = 0; p < path_count; p++) {
-			DISPLAYCONFIG_TARGET_DEVICE_NAME targetName;
-			memset(&targetName, 0, sizeof(targetName));
-			targetName.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
-			targetName.header.size = sizeof(targetName);
-			targetName.header.adapterId = paths[p].targetInfo.adapterId;
-			targetName.header.id = paths[p].targetInfo.id;
+			for (UINT32 p = 0; p < path_count; p++) {
+				DISPLAYCONFIG_TARGET_DEVICE_NAME targetName;
+				memset(&targetName, 0, sizeof(targetName));
+				targetName.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+				targetName.header.size = sizeof(targetName);
+				targetName.header.adapterId = paths[p].targetInfo.adapterId;
+				targetName.header.id = paths[p].targetInfo.id;
 
-			if (DisplayConfigGetDeviceInfo((DISPLAYCONFIG_DEVICE_INFO_HEADER*)&targetName) == ERROR_SUCCESS) {
-				if (wcsstr(targetName.monitorDevicePath, device_id) != NULL) {
-					display_name = vector<wchar_t>(targetName.monitorFriendlyDeviceName,
-						targetName.monitorFriendlyDeviceName + 64);
-					break;
+				if (DisplayConfigGetDeviceInfo((DISPLAYCONFIG_DEVICE_INFO_HEADER*)&targetName) == ERROR_SUCCESS) {
+					if (wcsstr(targetName.monitorDevicePath, device_id) != NULL) {
+						display_name = vector<wchar_t>(targetName.monitorFriendlyDeviceName,
+							targetName.monitorFriendlyDeviceName + 64);
+						break;
+					}
 				}
 			}
 		}
@@ -149,35 +151,7 @@ void nvDisplay::PopulateDisplayName()
 
 	if (display_name.empty()) {
 		display_name.resize(8);
-		memcpy(display_name.data(), "Unknown", 8 * sizeof(wchar_t));
-	}
-}
-
-// The nVidia driver is crap when it comes to re-applying color settings on display update
-// because it can apply them before the display is fully ready, especially if a display uses
-// HDR or Dolby-Vision. This can result in the display jumping to 100% brightness if you
-// happen to turn your eARC amp on or off. We compensate for that by having our own thread
-// that detects LUID updates, and that applies the gamma settings with a sensible delay.
-void nvDisplay::DetectLuid()
-{
-	atomic<bool> false_value = false;
-	uint32_t last_luid = GetLuid();
-
-	// Of course, this would be much nicer if C++ had wait_until() on std::atomics, which
-	// is such a BASIC synchronisation feature that one would have expected not to take
-	// 15 bloody years (and counting) to be implemented. Or do you expect me to use a
-	// conditional_variable WITH ITS COMPLETELY UNWARRANTED MUTEX with a stupid boolean?
-	// And don't get me started on std::thread::join() which is a FUCKING LIE when invoked
-	// from a destructor!! C++ thread synchronisation is a joke...
-	while (!WaitOnAddress(&stop_detect_luid_task, &false_value, sizeof(atomic<bool>), 1000)
-		&& GetLastError() == ERROR_TIMEOUT) {
-		uint32_t cur_luid = GetLuid();
-		if (cur_luid != 0 && cur_luid != last_luid) {
-			last_luid = cur_luid;
-			logger("Display %S switched to LUID: %u\n", display_name, last_luid);
-			Sleep(1000);
-			UpdateGamma();
-		}
+		memcpy(display_name.data(), L"Unknown", 8 * sizeof(wchar_t));
 	}
 }
 
@@ -189,6 +163,18 @@ uint32_t nvDisplay::GetLuid()
 		return 0;
 	// The part we are after is the second DWORD of the GUID, XOR'd with 0xF00000000
 	return ((uint32_t*)&guid)[1] ^ 0xf0000000;
+}
+
+bool nvDisplay::CheckLuidChange()
+{
+	uint32_t current_luid = GetLuid();
+	bool luid_changed = (current_luid != active_luid);
+	if (luid_changed) {
+		logger("Display %S switched to LUID: %u\n", display_name.data(), current_luid);
+		active_luid = current_luid;
+		known_luids.insert(active_luid);
+	}
+	return luid_changed;
 }
 
 float nvDisplay::GetBrightness()
@@ -215,8 +201,6 @@ bool nvDisplay::UpdateGamma()
 	NV_GAMMA_CORRECTION_EX gamma_correction;
 	NvAPI_Status r;
 
-	// The mutex is likely not needed but it can't hurt...
-	apply_gamma_mutex.lock();
 	gamma_correction.version = NVGAMMA_CORRECTION_EX_VER;
 	gamma_correction.unknown = 1;
 
@@ -235,7 +219,6 @@ bool nvDisplay::UpdateGamma()
 	if (r != NVAPI_OK)
 		logger("NvAPI_DISP_SetTargetGammaCorrection failed for display 0x%08x: %d %s\n", display_id, r, NvAPI_GetErrorString(r));
 
-	apply_gamma_mutex.unlock();
 	return (r == NVAPI_OK);
 }
 
@@ -265,11 +248,14 @@ void nvDisplay::SaveColorSettings()
 	uint32_t current_luid = GetLuid();
 	wchar_t reg_color_key_str[128];
 
+	// I sure want to know if we get in a situation where we fail to detect LUID changes
+	assert(current_luid == active_luid);
+
 	// Update and save the LUID list if needed
-	if (!luids.contains(current_luid)) {
-		luids.insert(current_luid);
+	if (!known_luids.contains(active_luid)) {
+		known_luids.insert(active_luid);
 		wstring multi_sz = accumulate(
-			luids.begin(), luids.end(), wstring{},
+			known_luids.begin(), known_luids.end(), wstring{},
 			[](wstring acc, uint32_t value) {
 				acc += to_wstring(value);
 				acc.push_back(L'\0');
@@ -281,7 +267,7 @@ void nvDisplay::SaveColorSettings()
 	}
 
 	// Update all the LUIDs known for this display
-	for (auto& luid : luids) {
+	for (auto& luid : known_luids) {
 		for (auto i = 0; i < 9; i++) {
 			_snwprintf_s(reg_color_key_str, ARRAYSIZE(reg_color_key_str), _TRUNCATE,
 				L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices\\%u-0\\Color\\%u",
@@ -293,50 +279,4 @@ void nvDisplay::SaveColorSettings()
 			L"Software\\NVIDIA Corporation\\Global\\NVTweak\\Devices\\%u-0\\Color\\NvCplGammaSet", luid);
 		WriteRegistryKey32(HKEY_CURRENT_USER, reg_color_key_str, 1);
 	}
-}
-
-size_t nvDisplay::EnumerateDisplays(list<nvDisplay>& display_list)
-{
-	NvAPI_Status r;
-	NvPhysicalGpuHandle gpu_handles[NVAPI_MAX_PHYSICAL_GPUS] = { 0 };
-	NvU32 gpu_count = 0;
-
-	display_list.clear();
-
-	r = NvAPI_EnumPhysicalGPUs(gpu_handles, &gpu_count);
-	if (r != NVAPI_OK) {
-		logger("NvAPI_EnumPhysicalGPUs: %d %s\n", r, NvAPI_GetErrorString(r));
-		return -1;
-	}
-
-	for (NvU32 i = 0; i < gpu_count; i++) {
-		NvU32 display_count = 0;
-
-		r = NvAPI_GPU_GetConnectedDisplayIds(gpu_handles[i], NULL, &display_count, 0);
-		if (r != NVAPI_OK) {
-			logger("NvAPI_GPU_GetConnectedDisplayIds[%d]: %d %s\n", i, r, NvAPI_GetErrorString(r));
-			continue;
-		}
-
-		if (display_count == 0)
-			continue;
-
-		NV_GPU_DISPLAYIDS* display_ids = (NV_GPU_DISPLAYIDS*)calloc(display_count, sizeof(NV_GPU_DISPLAYIDS));
-		if (display_ids == NULL) {
-			logger("Could not allocate NV_GPU_DISPLAYIDS array\n");
-			return -1;
-		}
-		display_ids[0].version = NV_GPU_DISPLAYIDS_VER;
-
-		r = NvAPI_GPU_GetConnectedDisplayIds(gpu_handles[i], display_ids, &display_count, 0);
-		if (r != NVAPI_OK) {
-			logger("NvAPI_GPU_GetConnectedDisplayIds[%d]: %d %s\n", i, r, NvAPI_GetErrorString(r));
-		} else {
-			for (NvU32 j = 0; j < display_count; j++)
-				display_list.emplace_back(display_ids[j].displayId);
-		}
-		free(display_ids);
-	}
-
-	return display_list.size();
 }

@@ -38,6 +38,7 @@
 #include <regex>
 #include <format>
 #include <sstream>
+#include <cassert>
 
 #pragma comment(lib, "dxva2.lib")
 
@@ -100,7 +101,6 @@ nvMonitor::nvMonitor(uint32_t display_id)
 	NvAPI_Status r;
 	NvAPI_ShortString nv_display_name;
 	NvDisplayHandle display_handle;
-	DWORD num_physical_monitors;
 	DISPLAY_DEVICE display_device{ .cb = sizeof(DISPLAY_DEVICE) }, monitor_device{ .cb = sizeof(DISPLAY_DEVICE) };
 
 	// Get the Windows display name
@@ -118,48 +118,10 @@ nvMonitor::nvMonitor(uint32_t display_id)
 	for (auto i = 0; i < sizeof(nv_display_name); i++)
 		display_name[i] = nv_display_name[i];
 
-	// Get the physical HMONITOR handle associated with the display
-	for (auto i = 0; EnumDisplayDevices(NULL, i, &display_device, 0); i++) {
-		if (_wcsicmp(display_device.DeviceName, display_name) != 0)
-			continue;
-		for (auto j = 0; EnumDisplayDevices(display_name, j, &monitor_device, EDD_GET_DEVICE_INTERFACE_NAME); ++j) {
-			if (monitor_device.StateFlags & DISPLAY_DEVICE_ACTIVE) {
-				DEVMODE dev_mode{ .dmSize = sizeof(dev_mode) };
-				if (EnumDisplaySettings(display_name, ENUM_CURRENT_SETTINGS, &dev_mode) != FALSE) {
-					// https://stackoverflow.com/a/38380281/1069307
-					BOOL b = EnumDisplayMonitors(NULL, NULL,
-						[](HMONITOR monitor_handle, HDC hDC, LPRECT rc, LPARAM data) -> BOOL {
-							auto& monitor_data = *reinterpret_cast<nvMonitor*>(data);
-							MONITORINFOEX monitor_info;
-							monitor_info.cbSize = sizeof(monitor_info);
-							if (GetMonitorInfo(monitor_handle, &monitor_info) &&
-								_wcsicmp(monitor_info.szDevice, monitor_data.display_name) == 0)
-								monitor_data.monitor_handle = monitor_handle;
-							return TRUE;
-						},
-						reinterpret_cast<LPARAM>(this));
-					if (b && monitor_handle != NULL) {
-						wcscpy_s(device_name, ARRAYSIZE(device_name), monitor_device.DeviceString);
-						wcscpy_s(device_id, ARRAYSIZE(device_id), monitor_device.DeviceID);
-						goto have_physical_handle;
-					}
-				}
-			}
-		}
-	}
-	return;
+	// Get the monitor data associated with the display
+	GetMonitorData();
 
-have_physical_handle:
-	// With the physical monitor handle, we can look at its VCP features
-	if (!GetNumberOfPhysicalMonitorsFromHMONITOR(monitor_handle, &num_physical_monitors))
-		return;
-
-	physical_monitors.resize(num_physical_monitors);
-
-	if (!GetPhysicalMonitorsFromHMONITOR(monitor_handle, num_physical_monitors, physical_monitors.data()))
-		physical_monitors.resize(0);
-
-	if (physical_monitors.size() != 0) {
+	if (!physical_monitors.empty()) {
 		DWORD input = 0, max = 0;
 		steady_clock::time_point begin = steady_clock::now();
 		while (!GetVCPFeatureAndVCPFeatureReply(physical_monitors.at(0).hPhysicalMonitor, VCP_INPUT_SOURCE, NULL, &input, &max)) {
@@ -192,6 +154,51 @@ nvMonitor::~nvMonitor()
 	DestroyPhysicalMonitors((DWORD)physical_monitors.size(), physical_monitors.data());
 }
 
+void nvMonitor::GetMonitorData()
+{
+	DWORD num_physical_monitors;
+	DISPLAY_DEVICE display_device{ .cb = sizeof(DISPLAY_DEVICE) }, monitor_device{ .cb = sizeof(DISPLAY_DEVICE) };
+	monitor_handle = NULL;
+
+	// Get the physical HMONITOR handle associated with the display
+	for (auto i = 0; EnumDisplayDevices(NULL, i, &display_device, 0); i++) {
+		if (_wcsicmp(display_device.DeviceName, display_name) != 0)
+			continue;
+		for (auto j = 0; EnumDisplayDevices(display_name, j, &monitor_device, EDD_GET_DEVICE_INTERFACE_NAME); ++j) {
+			if (monitor_device.StateFlags & DISPLAY_DEVICE_ACTIVE) {
+				DEVMODE dev_mode{ .dmSize = sizeof(dev_mode) };
+				if (EnumDisplaySettings(display_name, ENUM_CURRENT_SETTINGS, &dev_mode) != FALSE) {
+					// https://stackoverflow.com/a/38380281/1069307
+					BOOL b = EnumDisplayMonitors(NULL, NULL,
+						[](HMONITOR monitor_handle, HDC hDC, LPRECT rc, LPARAM data) -> BOOL {
+							auto& monitor_data = *reinterpret_cast<nvMonitor*>(data);
+							MONITORINFOEX monitor_info;
+							monitor_info.cbSize = sizeof(monitor_info);
+							if (GetMonitorInfo(monitor_handle, &monitor_info) &&
+								_wcsicmp(monitor_info.szDevice, monitor_data.display_name) == 0)
+								monitor_data.monitor_handle = monitor_handle;
+							return TRUE;
+						},
+						reinterpret_cast<LPARAM>(this));
+					if (b && monitor_handle != NULL) {
+						wcscpy_s(device_name, ARRAYSIZE(device_name), monitor_device.DeviceString);
+						// I sure want people to let me know if a Device ID can ever change
+						if (device_id[0] != L'\0')
+							assert(wcscmp(device_id, monitor_device.DeviceID) == 0);
+						wcscpy_s(device_id, ARRAYSIZE(device_id), monitor_device.DeviceID);
+						if (!GetNumberOfPhysicalMonitorsFromHMONITOR(monitor_handle, &num_physical_monitors))
+							return;
+						physical_monitors.resize(num_physical_monitors);
+						if (!GetPhysicalMonitorsFromHMONITOR(monitor_handle, num_physical_monitors, physical_monitors.data()))
+							physical_monitors.resize(0);
+						return;
+					}
+				}
+			}
+		}
+	}
+}
+
 bool nvMonitor::ParseEdid()
 {
 	size_t k, edid_size;
@@ -207,7 +214,7 @@ bool nvMonitor::ParseEdid()
 		if (edid_registry_path[k] == L'#')
 			edid_registry_path[k] = L'\\';
 	edid_size = (size_t)GetRegistryKeySize(HKEY_LOCAL_MACHINE, edid_registry_path, REG_BINARY);
-	if (edid_size == 0) {
+	if (edid_size < 128) {
 		logger("Failed to read EDID for %S\n", device_id);
 		return false;
 	}
@@ -331,9 +338,9 @@ void nvMonitor::GetAllowedInputs()
 			inputs += separator + InputToString(input);
 			separator = ", ";
 		}
-		logger("Retrieved %S [%s] VCP capabilities in %u.%03u seconds (%d %s)\n", display_name, model_name.c_str(),
+		logger("Retrieved %S VCP capabilities in %u.%03u seconds (%d %s)\n", display_name,
 			(unsigned)(elapsed.count() / 1000), (unsigned)(elapsed.count() % 1000), i, (i == 1) ? "try" : "tries");
-		logger("Valid input(s): %s\n", inputs.c_str());
+		logger("%s Valid input(s): %s\n", model_name.c_str(), inputs.c_str());
 
 	} else {
 		logger("Could not get VCP capabilities for %S: %x\n", display_name, GetLastError());
@@ -392,7 +399,7 @@ uint8_t nvMonitor::SetMonitorInput(uint8_t requested)
 	}
 
 	if (current == requested) {
-		logger("Current monitor input is the same as requested - not switching inputs\n");
+		logger("Current %s input is the same as requested: Not switching inputs\n", model_name.c_str());
 		ret = requested;
 	} else {
 		if (!SetVCPFeature(physical_monitor->hPhysicalMonitor, VCP_INPUT_SOURCE, requested))

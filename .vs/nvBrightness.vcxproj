@@ -227,12 +227,14 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\src\nvDisplay.cpp" />
+    <ClCompile Include="..\src\nvList.cpp" />
     <ClCompile Include="..\src\nvMonitor.cpp" />
     <ClCompile Include="..\src\nvBrightness.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\DarkTaskDialog.hpp" />
     <ClInclude Include="..\src\nvDisplay.hpp" />
+    <ClInclude Include="..\src\nvList.hpp" />
     <ClInclude Include="..\src\nvMonitor.hpp" />
     <ClInclude Include="..\src\nvapi.h" />
     <ClInclude Include="..\src\nvBrightness.h" />

@@ -60,7 +60,9 @@ public:
 	static const char* InputToString(uint8_t input);
 	nvMonitor(uint32_t);
 	~nvMonitor();
+	void GetMonitorData();
 	bool ParseEdid();
+	wchar_t* GetDeviceId() { return device_id; };
 	uint8_t GetHomeInput() { return home_input; };
 	uint8_t GetNextInput();
 	uint8_t GetPrevInput();

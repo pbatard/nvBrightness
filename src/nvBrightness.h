@@ -64,8 +64,8 @@ enum {
 enum {
 	hkDecreaseBrightness = 0,
 	hkIncreaseBrightness,
-	hkDecreaseBrightness2,
-	hkIncreaseBrightness2,
+	hkDecreaseBrightnessAlt,
+	hkIncreaseBrightnessAlt,
 	hkPowerOffMonitor,
 	hkRestoreInput,
 	hkPreviousInput,

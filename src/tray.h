@@ -28,6 +28,7 @@
 #include <windows.h>
 #include <dwmapi.h>
 #include <shellapi.h>
+#include <dbt.h>
 
 #pragma comment(lib, "dwmapi.lib")
 
@@ -67,6 +68,7 @@ static void tray_update(struct tray* tray);
 
 #define WM_TRAY_CALLBACK_MESSAGE (WM_USER + 1)
 #define ID_TRAY_FIRST 1000
+#define ID_REFRESH_TIMER 1000
 
 extern WNDCLASSEX wc;
 extern NOTIFYICONDATA nid;
@@ -84,7 +86,14 @@ HMENU hmenu = NULL;                 \
 const wchar_t* class_name = NULL;   \
 hotkey_cb hkcb;
 
+static void CALLBACK _tray_device_timer(HWND hWnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime)
+{
+	KillTimer(hWnd, ID_REFRESH_TIMER);
+	SendMessage(hWnd, WM_HOTKEY, WM_DEVICECHANGE, 0);
+}
+
 static LRESULT CALLBACK _tray_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+	static uint64_t last_refresh = 0;
 	switch (msg) {
 	case WM_CLOSE:
 		DestroyWindow(hwnd);
@@ -121,6 +130,19 @@ static LRESULT CALLBACK _tray_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARA
 	case WM_HOTKEY:
 		if (hkcb && hkcb(wparam, lparam))
 			return 0;
+		break;
+	case WM_DEVICECHANGE:
+		// WM_DEVICECHANGE + DBT_DEVNODES_CHANGED is a better reflection of display
+		// changes compared to WM_DISPLAYCHANGE. For one thing WM_DISPLAYCHANGE is
+		// *NOT* triggered if you remove the last active display from your machine.
+		if (wparam == DBT_DEVNODES_CHANGED) {
+			// However, we don't want to clobber the system with notifications, so
+			// we time delay our notification by 1 second, to group everything.
+			if (GetTickCount64() > last_refresh + 1000) {
+				last_refresh = GetTickCount64();
+				SetTimer(hwnd, ID_REFRESH_TIMER, 1000, _tray_device_timer);
+			}
+		}
 		break;
 	}
 	return DefWindowProc(hwnd, msg, wparam, lparam);

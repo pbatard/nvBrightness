@@ -19,34 +19,24 @@
 
 #pragma once
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <stdint.h>
-#include <string>
-#include <future>
-#include <set>
+#include <list>
+#include <mutex>
+#include <vector>
 
-#include "nvBrightness.h"
-#include "nvMonitor.hpp"
+#include "nvDisplay.hpp"
 
 using namespace std;
 
-class nvDisplay : public nvMonitor {
-	uint32_t display_id;
-	vector<wchar_t> display_name;
-	set<uint32_t> known_luids;
-	uint32_t active_luid;
-	float color_setting[nvAttrMax][nvColorMax];
-	void PopulateDisplayName();
+class nvList {
+private:
+	mutex list_mutex;
+	list<nvDisplay> displays;
+	vector<nvDisplay*> active;
 public:
-	nvDisplay(uint32_t);
-	uint32_t GetDisplayId() { return display_id; };
-	uint32_t GetLuid();
-	wchar_t* GetDisplayName() { return display_name.data(); };
-	float GetBrightness();
-	bool UpdateGamma();
-	bool CheckLuidChange();
-	void ChangeBrightness(float);
-	void LoadColorSettings();
-	void SaveColorSettings();
+	void Clear() { active.clear(); displays.clear(); }
+	bool Update();
+	nvDisplay* GetDisplay(size_t index);
+	nvDisplay* GetDisplay(const wchar_t* device_id);
+	nvDisplay* GetNextDisplay(const wchar_t* device_id);
+	nvDisplay* GetPrevDisplay(const wchar_t* device_id);
 };

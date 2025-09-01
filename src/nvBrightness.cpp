@@ -51,6 +51,7 @@ using namespace std;
 #include "DarkTaskDialog.hpp"
 #include "nvMonitor.hpp"
 #include "nvDisplay.hpp"
+#include "nvList.hpp"
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "powrprof.lib")
@@ -73,7 +74,7 @@ typedef struct {
 	bool use_alternate_keys;
 	bool resume_to_last_input;
 	float increment;
-	uint32_t active_display;
+	const wchar_t* active_device_id;
 } settings_t;
 
 // Globals
@@ -82,10 +83,11 @@ GLOBAL_TRAY_INSTANCE;
 wchar_t *APPLICATION_NAME = NULL, *COMPANY_NAME = NULL;	// Needed for registry.h
 
 static version_t version = { 0 };
-static settings_t settings = { true, false, false, false, 0.5f, 0 };
+static settings_t settings = { true, false, false, false, 0.5f, L"" };
 static vector<struct tray_menu> submenu;
+static int submenu_index = 0;
 static struct tray tray = { 0 };
-static list<nvDisplay> display_list;
+static nvList displays;
 // The following string buffers are modified to display the input names
 static wchar_t home_input[64] = L"Home input\t［⊞］［Shift］［Home］";
 static wchar_t next_input[64] = L"Next input\t［⊞］［Shift］［PgUp］";
@@ -114,25 +116,16 @@ static bool IsDarkModeEnabled(void)
 	return false;
 }
 
-// I sure wouldn't mind using a vector instead of a list and not having to do this,
-// if C++ didn't throw a hissy fit about emplace and future in constructors.
-static nvDisplay& GetDisplayAt(int index)
+static HICON GetCurrentIcon(nvDisplay* display)
 {
-	int i = 0;
-	for (auto& display : display_list)
-		if (i++ == index)
-			return display;
-	return display_list.front();
-}
-
-static int GetIconIndex(nvDisplay& display)
-{
-	int icon_index = (int)(display.GetBrightness() - 80.0f);
+	int icon_index = 20;
+	if (display != nullptr)
+		icon_index = (int)(display->GetBrightness() - 80.0f);
 	if (icon_index < 0)
 		icon_index = 0;
 	if (icon_index > 20)
 		icon_index = 20;
-	return icon_index;
+	return LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + icon_index));
 }
 
 static void UnRegisterHotKeys(void)
@@ -160,8 +153,8 @@ static bool RegisterHotKeys(void)
 		// So we have to use different IDs even if we want to map 2 keys to the same action...
 		b &= tray_register_hotkey(hkIncreaseBrightness, MOD_ALT, VK_RIGHT);
 		b &= tray_register_hotkey(hkDecreaseBrightness, MOD_ALT, VK_LEFT);
-		b &= tray_register_hotkey(hkIncreaseBrightness2, 0, VK_BROWSER_FORWARD);
-		b &= tray_register_hotkey(hkDecreaseBrightness2, 0, VK_BROWSER_BACK);
+		b &= tray_register_hotkey(hkIncreaseBrightnessAlt, 0, VK_BROWSER_FORWARD);
+		b &= tray_register_hotkey(hkDecreaseBrightnessAlt, 0, VK_BROWSER_BACK);
 	} else {
 		b &= tray_register_hotkey(hkIncreaseBrightness, MOD_WIN | MOD_SHIFT, VK_ADD);
 		b &= tray_register_hotkey(hkDecreaseBrightness, MOD_WIN | MOD_SHIFT, VK_SUBTRACT);
@@ -299,22 +292,26 @@ static void ResumeToLastInputCallback(struct tray_menu* item)
 
 static void ActiveDisplayCallback(struct tray_menu* item)
 {
-	uint32_t i, selected_index = (uint32_t)(uintptr_t)item->context;
+	uint32_t i;
+	wchar_t* selected_device_id = (wchar_t*)item->context;
 
-	if (item->checked || display_list.size() == 0)
+	if (item->checked)
 		return;
 
-	for (i = 1; i <= display_list.size(); i++)
+	for (i = 1; i < submenu.size() - 5; i++)
 		submenu[i].checked = false;
+
+	auto display = displays.GetDisplay(selected_device_id);
+	if (display == nullptr) {
+		logger("ERROR: No active display!\n");
+		return;
+	}
+
+	settings.active_device_id = display->GetDeviceId();
+	WriteRegistryKeyStr(HKEY_CURRENT_USER, L"ActiveDisplay", settings.active_device_id);
+	logger("Active display: %S\n", display->GetDisplayName());
+	tray.icon = GetCurrentIcon(display);
 	item->checked = true;
-
-	settings.active_display = selected_index;
-	WriteRegistryKey32(HKEY_CURRENT_USER, L"ActiveDisplay", settings.active_display);
-
-	auto& display = GetDisplayAt(settings.active_display);
-	logger("Active display: %S\n", display.GetDisplayName());
-	tray.icon = LoadIcon(GetModuleHandle(NULL),
-		MAKEINTRESOURCE(IDI_ICON_00 + GetIconIndex(display)));
 	tray_simulate_hottkey(hkUpdateSubmenu);
 }
 
@@ -331,11 +328,10 @@ static void AutoStartCallback(struct tray_menu* item)
 	exe_path[0] = L'"';
 	exe_path[wcslen(exe_path)] = L'"';
 
-	if (settings.autostart) {
+	if (settings.autostart)
 		WriteRegistryKeyStr(HKEY_CURRENT_USER, key_name, exe_path);
-	} else {
+	else
 		DeleteRegistryValue(HKEY_CURRENT_USER, key_name);
-	}
 	tray_update(&tray);
 }
 
@@ -357,28 +353,98 @@ static void ExitCallback(struct tray_menu* item)
 	tray_exit();
 }
 
+static void CreateSubmenu()
+{
+	submenu.clear();
+
+	// Try to reselect the display, or reset to first
+	nvDisplay* display = displays.GetDisplay(settings.active_device_id);
+	if (display == nullptr)
+		display = displays.GetDisplay((size_t)0);
+	if (display == nullptr) {
+		logger("No active displays!\n");
+		submenu.push_back({ .text = NULL });
+		if (tray.menu != NULL && submenu_index != 0) {
+			tray.menu[submenu_index].disabled = true;
+			tray.menu[submenu_index + 1].disabled = true;
+		}
+		return;
+	}
+
+	// Set the active device
+	settings.active_device_id = display->GetDeviceId();
+
+	// Create the menu data
+	submenu.push_back({ .text = L"Display to apply shortcuts:\t［⊞］［Shift］［,］ / ［.］" });
+	for (auto i = 0; (display = displays.GetDisplay(i)) != nullptr; i++) {
+		submenu.push_back({
+			.text = display->GetDisplayName(),
+			.checked = (display->GetDeviceId() == settings.active_device_id),
+			.cb = ActiveDisplayCallback,
+			.context = (void*)display->GetDeviceId()
+		});
+	}
+
+	display = displays.GetDisplay(settings.active_device_id);
+
+	// Update the menu entries to add/remove the input names
+	if (display->GetHomeInput() == 0) {
+		_snwprintf_s(home_input, ARRAYSIZE(home_input), _TRUNCATE, L"Home input\t［⊞］［Shift］［Home］");
+		_snwprintf_s(wake_input, ARRAYSIZE(wake_input), _TRUNCATE, L"Wake up to home");
+	} else {
+		_snwprintf_s(home_input, ARRAYSIZE(home_input), _TRUNCATE,
+			L"Home input  (%hs)\t［⊞］［Shift］［Home］", nvDisplay::InputToString(display->GetHomeInput()));
+		_snwprintf_s(wake_input, ARRAYSIZE(wake_input), _TRUNCATE,
+			L"Wake up to home (%hs)", nvDisplay::InputToString(display->GetHomeInput()));
+	}
+	if (display->GetNumberOfInputs() <= 1) {
+		_snwprintf_s(next_input, ARRAYSIZE(next_input), _TRUNCATE, L"Next input\t［⊞］［Shift］［PgUp］");
+		_snwprintf_s(prev_input, ARRAYSIZE(prev_input), _TRUNCATE, L"Prev input\t［⊞］［Shift］［PgDn］");
+	} else {
+		_snwprintf_s(next_input, ARRAYSIZE(next_input), _TRUNCATE,
+			L"Next input    (%hs)\t［⊞］［Shift］［PgUp］", nvDisplay::InputToString(display->GetNextInput()));
+		_snwprintf_s(prev_input, ARRAYSIZE(prev_input), _TRUNCATE,
+			L"Prev input    (%hs)\t［⊞］［Shift］［PgDn］", nvDisplay::InputToString(display->GetPrevInput()));
+	}
+
+	submenu.push_back({ .text = L"-" });
+	submenu.push_back({ .text = home_input, .disabled = (display->GetHomeInput() == 0), .cb = RestoreInputCallback });
+	submenu.push_back({ .text = next_input, .disabled = (display->GetNumberOfInputs() <= 1) });
+	submenu.push_back({ .text = prev_input, .disabled = (display->GetNumberOfInputs() <= 1) });
+	submenu.push_back({ .text = NULL });
+
+	// Also update the wake to home enabled status and make sure the inputs submenu is enabled
+	if (tray.menu != NULL && submenu_index != 0) {
+		tray.menu[submenu_index].disabled = false;
+		tray.menu[submenu_index + 1].disabled = (display->GetHomeInput() == 0);
+	}
+}
+
 // Callback for keyboard hotkeys
 static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
 {
+	bool is_enabled;
 	float delta = 0.0f;
-	uint8_t input = 0, i;
+	uint8_t input = 0;
+	nvDisplay* display;
 
-	if (wparam < 0 || wparam >= hkMax)
+	if (!settings.enabled)
 		return false;
+
 	switch (wparam) {
 	case hkDecreaseBrightness:
-	case hkDecreaseBrightness2:
+	case hkDecreaseBrightnessAlt:
 		delta = -2.0f * settings.increment;
 		[[fallthrough]];
 	case hkIncreaseBrightness:
-	case hkIncreaseBrightness2:
-		if (display_list.size() >= 1) {
+	case hkIncreaseBrightnessAlt:
+		display = displays.GetDisplay(settings.active_device_id);
+		if (display != nullptr) {
 			delta += settings.increment;
-			auto& display = GetDisplayAt(settings.active_display);
-			display.ChangeBrightness(delta);
-			display.UpdateGamma();
-			display.SaveColorSettings();
-			tray.icon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + GetIconIndex(display)));
+			display->ChangeBrightness(delta);
+			display->UpdateGamma();
+			display->SaveColorSettings();
+			tray.icon = GetCurrentIcon(display);
 			tray_update(&tray);
 		}
 		break;
@@ -386,79 +452,61 @@ static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
 		SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
 		break;
 	case hkRestoreInput:
-		if (display_list.size() >= 1) {
-			auto& display = GetDisplayAt(settings.active_display);
-			display.SetMonitorInput(VCP_INPUT_HOME);
-		}
+		display = displays.GetDisplay(settings.active_device_id);
+		if (display != nullptr)
+			display->SetMonitorInput(VCP_INPUT_HOME);
 		break;
 	case hkNextInput:
 	case hkPreviousInput:
-		if (display_list.size() >= 1) {
-			auto& display = GetDisplayAt(settings.active_display);
-			if (display.SupportsVCP()) {
-				input = display.SetMonitorInput((wparam == hkNextInput) ? VCP_INPUT_NEXT : VCP_INPUT_PREVIOUS);
-				if (input != 0)
-					logger("Switched to input: %s\n", nvDisplay::InputToString(input));
-				else
-					logger("Failed to switch inputs\n");
-			} else
-				logger("Display %S does not support input switching\n", display.GetDisplayName());
-		}
+		display = displays.GetDisplay(settings.active_device_id);
+		if (display != nullptr && display->SupportsVCP()) {
+			input = display->SetMonitorInput((wparam == hkNextInput) ? VCP_INPUT_NEXT : VCP_INPUT_PREVIOUS);
+			if (input != 0)
+				logger("Display %S switched to input: %s\n", display->GetDisplayName(), nvDisplay::InputToString(input));
+			else
+				logger("Display %S failed to switch inputs\n", display->GetDisplayName());
+		} else
+			logger("Display %S does not support input switching\n", display->GetDisplayName());
 		break;
 	case hkNextMonitor:
 	case hkPreviousMonitor:
-		if (display_list.size() >= 1) {
-			settings.active_display += display_list.size() + (wparam == hkNextMonitor) ? 1 : -1;
-			settings.active_display %= display_list.size();
-			for (size_t i = 1; i <= display_list.size(); i++)
-				submenu[i].checked = (i == settings.active_display + 1);
-			WriteRegistryKey32(HKEY_CURRENT_USER, L"ActiveDisplay", settings.active_display);
-			auto& display = GetDisplayAt(settings.active_display);
-			logger("Active display: %S\n", display.GetDisplayName());
-			tray.icon = LoadIcon(GetModuleHandle(NULL),	MAKEINTRESOURCE(IDI_ICON_00 + GetIconIndex(display)));
+		display = (wparam == hkNextMonitor) ? displays.GetNextDisplay(settings.active_device_id) :
+			displays.GetPrevDisplay(settings.active_device_id);
+		if (display != nullptr) {
+			settings.active_device_id = display->GetDeviceId();
+			WriteRegistryKeyStr(HKEY_CURRENT_USER, L"ActiveDisplay", settings.active_device_id);
+			logger("Active display: %S\n", display->GetDisplayName());
+			tray.icon = GetCurrentIcon(display);
 		}
 		[[fallthrough]];
 	case hkUpdateSubmenu:
-		// This fake hotkey message is issued when we want to update the Input Control submenu
-		if (display_list.size() >= 1) {
-			if (tray.menu[4].submenu == NULL) {
-				logger("CODE: Submenu index!\n");
-				break;
-			}
-			for (i = 0; tray.menu[4].submenu[i].text != NULL; i++);
-			if (i < 4) {
-				logger("CODE: Submenu items!\n");
-				break;
-			}
-			auto& display = GetDisplayAt(settings.active_display);
-			// Set the enabled/disabled status
-			tray.menu[4].submenu[i - 3].disabled = (display.GetHomeInput() == 0);
-			tray.menu[4].submenu[i - 2].disabled = (display.GetNumberOfInputs() <= 1);
-			tray.menu[4].submenu[i - 1].disabled = (display.GetNumberOfInputs() <= 1);
-			// Update the menu entries to add/remove the input names
-			if (display.GetHomeInput() == 0) {
-				_snwprintf_s(home_input, ARRAYSIZE(home_input), _TRUNCATE, L"Home input\t［⊞］［Shift］［Home］");
-				_snwprintf_s(wake_input, ARRAYSIZE(wake_input), _TRUNCATE, L"Wake up to home");
-			} else {
-				_snwprintf_s(home_input, ARRAYSIZE(home_input), _TRUNCATE,
-					L"Home input  (%hs)\t［⊞］［Shift］［Home］", nvDisplay::InputToString(display.GetHomeInput()));
-				_snwprintf_s(wake_input, ARRAYSIZE(wake_input), _TRUNCATE,
-					L"Wake up to home (%hs)", nvDisplay::InputToString(display.GetHomeInput()));
-			}
-			if (display.GetNumberOfInputs() <= 1) {
-				_snwprintf_s(next_input, ARRAYSIZE(next_input), _TRUNCATE, L"Next input\t［⊞］［Shift］［PgUp］");
-				_snwprintf_s(prev_input, ARRAYSIZE(prev_input), _TRUNCATE, L"Prev input\t［⊞］［Shift］［PgDn］");
-			} else {
-				_snwprintf_s(next_input, ARRAYSIZE(next_input), _TRUNCATE,
-					L"Next input    (%hs)\t［⊞］［Shift］［PgUp］", nvDisplay::InputToString(display.GetNextInput()));
-				_snwprintf_s(prev_input, ARRAYSIZE(prev_input), _TRUNCATE,
-					L"Prev input    (%hs)\t［⊞］［Shift］［PgDn］", nvDisplay::InputToString(display.GetPrevInput()));
-			}
-			tray_update(&tray);
+		CreateSubmenu();
+		tray_update(&tray);
+		break;
+	case WM_DEVICECHANGE:	// Converted WM_ message
+		is_enabled = settings.enabled;
+		settings.enabled = false;
+		logger("Display configuration has changed: Updating display list.\n");
+		UnRegisterHotKeys();
+		displays.Update();
+		CreateSubmenu();
+		display = displays.GetDisplay(settings.active_device_id);
+		// The nVidia driver is crap when it comes to re-applying color settings on display update
+		// because it can apply them before the display is fully ready, especially if a display uses
+		// HDR or Dolby-Vision. This can result in the display jumping to 100% brightness if you
+		// happen to turn your eARC amp on or off. We compensate for that by re-applying gammma
+		// after a sensible delay if we detect an LUID update.
+		if (display != nullptr && display->CheckLuidChange()) {
+			Sleep(1000);
+			display->UpdateGamma();
 		}
+		tray.icon = GetCurrentIcon(display);
+		tray_update(&tray);
+		RegisterHotKeys();
+		settings.enabled = is_enabled;
 		break;
 	default:
-		logger("Unhandled Hot Key!\n");
+		logger("Unhandled Hot Key 0x%08x!\n", wparam);
 		break;
 	}
 
@@ -468,6 +516,7 @@ static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
 // Callback for power events
 static ULONG CALLBACK PowerEventCallback(PVOID Context, ULONG Type, PVOID Setting)
 {
+	nvDisplay* display;
 	if (!settings.enabled || !settings.resume_to_last_input)
 		return 0;
 
@@ -476,13 +525,13 @@ static ULONG CALLBACK PowerEventCallback(PVOID Context, ULONG Type, PVOID Settin
 	case PBT_APMSTANDBY:
 		logger("Suspending system - saving monitor inputs\n");
 		// User may have switched inputs manually so save the current one
-		for (auto& display : display_list)
-			display.SaveHomeInput();
+		for (auto i = 0; (display = displays.GetDisplay(i)) != nullptr; i++)
+			display->SaveHomeInput();
 		break;
 	case PBT_APMRESUMESUSPEND:
 		logger("Resume from suspend - restoring monitor inputs\n");
-		for (auto& display : display_list)
-			display.SetMonitorInput(VCP_INPUT_HOME);
+		for (auto i = 0; (display = displays.GetDisplay(i)) != nullptr; i++)
+			display->SetMonitorInput(VCP_INPUT_HOME);
 		break;
 	default:
 		break;
@@ -585,12 +634,12 @@ bool PopulateVersionData(void)
 int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nShowCmd)
 {
 	static wchar_t mutex_name[64];
-	int ret = 1, icon_index = 20, i = 0;
+	int ret = 1;
 	wchar_t key_name[128];
-	bool enable_home = false;
 	GUID guid = TRAY_ICON_GUID;
 	HANDLE mutex = NULL, power_handle = NULL;
 	DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS power_params;
+	nvDisplay* display;
 
 	SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
 
@@ -622,42 +671,37 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	}
 
 	// Build the display list
-	nvDisplay::EnumerateDisplays(display_list);
+	displays.Update();
 
-	// Update settings
+	// Read the settings
 	settings.use_alternate_keys = (ReadRegistryKey32(HKEY_CURRENT_USER, L"UseAlternateKeys") != 0);
 	settings.resume_to_last_input = (ReadRegistryKey32(HKEY_CURRENT_USER, L"ResumeToLastInput") != 0);
 	_snwprintf_s(key_name, ARRAYSIZE(key_name), _TRUNCATE, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run\\%s", version.ProductName);
 	settings.autostart = (ReadRegistryKeyStr(HKEY_CURRENT_USER, key_name)[0] != 0);
-	settings.active_display = ReadRegistryKey32(HKEY_CURRENT_USER, L"ActiveDisplay");
-	// Make sure the active display index is within our list boundaries. If not, reset to 0.
-	if (settings.active_display >= display_list.size())
-		settings.active_display = 0;
+	settings.active_device_id = ReadRegistryKeyStr(HKEY_CURRENT_USER, L"ActiveDisplay");
 
-	// Create the Input controls submenu
-	submenu.push_back({ .text = L"Display to apply shortcuts:\t［⊞］［Shift］［,］ / ［.］" });
-	// The active display selection assumes that Windows keeps the display order between sessions
-	for (auto& display : display_list) {
-		submenu.push_back({ .text = display.GetDisplayName(), .checked = (i == settings.active_display),
-			.cb = ActiveDisplayCallback, .context = (void*)(uintptr_t)i });
-		if (i == settings.active_display && display.GetHomeInput() != 0)
-			enable_home = true;
-		i++;
+
+	// Get the selected active display
+	display = displays.GetDisplay(settings.active_device_id);
+	if (display == nullptr)
+		display = displays.GetDisplay((size_t)0);
+	if (display == nullptr) {
+		ProperMessageBox(TD_WARNING_ICON, L"No compatible displays",
+			L"A compatible display could not be detected on this system.\n"
+			"%s will now exit.\n", version.ProductName);
+		goto out;
 	}
-	submenu.push_back({ .text = L"-" });
-	submenu.push_back({ .text = home_input, .disabled = !enable_home, .cb = RestoreInputCallback });
-	submenu.push_back({ .text = next_input, .disabled = true, });
-	submenu.push_back({ .text = prev_input, .disabled = true });
-	submenu.push_back({ .text = NULL });
+	settings.active_device_id = display->GetDeviceId();
 
-	// Create the main menu
+	// Create the tray menu
+	CreateSubmenu();
 	static struct tray_menu menu[] = {
 		{ .text = L"Brightness +\t［⊞］［Shift］［Num +］", .cb = IncreaseBrightnessCallback },
 		{ .text = L"Brightness −\t［⊞］［Shift］［Num −］", .cb = DecreaseBrightnessCallback },
-		{ .text = L"No signal\t［⊞］［Shift］［End］", .cb = PowerOffCallback },
+		{ .text = L"Turn off display(s)\t［⊞］［Shift］［End］", .cb = PowerOffCallback },
 		{ .text = L"-" },
 		{ .text = L"Input controls", .submenu = submenu.data()},
-		{ .text = wake_input, .disabled = (display_list.front().GetHomeInput() == 0),
+		{ .text = wake_input, .disabled = (display->GetHomeInput() == 0),
 			.checked = settings.resume_to_last_input, .cb = ResumeToLastInputCallback },
 		{ .text = L"-" },
 		{ .text = L"Auto Start", .checked = settings.autostart, .cb = AutoStartCallback },
@@ -672,11 +716,11 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		menu[0].text = L"Brightness +\t［Internet Fwd］ or ［Alt］［→］";
 		menu[1].text = L"Brightness −\t［Internet Back］ or ［Alt］［←］";
 	}
-
-	if (display_list.size() >= 1)
-		icon_index = GetIconIndex(GetDisplayAt(settings.active_display));
-	tray.icon =	LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON_00 + icon_index));
+	tray.icon =	GetCurrentIcon(display);
 	tray.menu = menu;
+
+	// Avoid having to manually keep track of the submenu index
+	for (submenu_index = 0; menu[submenu_index].submenu == NULL; submenu_index++);
 
 	if (tray_init(&tray, version.ProductName, guid, HotkeyCallback) < 0) {
 		ProperMessageBox(TD_ERROR_ICON, L"Failed to create tray application",
@@ -703,9 +747,11 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 	ret = 0;
 
 out:
-	PowerUnregisterSuspendResumeNotification(power_handle);
+	if (power_handle != NULL)
+		PowerUnregisterSuspendResumeNotification(power_handle);
 	UnRegisterHotKeys();
-	display_list.clear();
+	// We *must* clear the list before we clear the nVidia API calls
+	displays.Clear();
 	NvExit();
 	free(version.data);
 #ifdef _DEBUG
