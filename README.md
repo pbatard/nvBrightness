@@ -8,6 +8,7 @@ nvBrightness: nVidia Control Panel brightness at your fingertips
 
 ![nvBrightness screenshot](https://raw.githubusercontent.com/pbatard/nvBrightness/master/icons/nvBrightness.png)
 
+
 ## Motivation
 
 Because I recently got an OLED monitor that runs in HDR mode, and that I want to adjust the
@@ -24,9 +25,10 @@ nVidia control panel uses.
 In short, this is software *by me, for me, for my specific hardware and workflow*, which you
 might also find useful for you, but which I am not planning to expand for your specific use.
 
+
 ## How it works
 
-1. By default, we register the `Win`+`Shift`+`PageUp` and `Win`+`Shift`+`PageDown` keyboard
+1. By default, we register the `Win`+`Shift`+`Num +` and `Win`+`Shift`+`Num -` keyboard
    shortcuts. Alternatively, if you choose so, the Internet navigation keys of your keyboard
    and `Alt`-`←` and  `Alt`-`→` are registered. Also, so that we can provide a shortcut for
    easy display poweroff, we register `Win`+`Shift`+`End`.
@@ -47,6 +49,16 @@ might also find useful for you, but which I am not planning to expand for your s
    `NvAPI_SYS_GetLUIDFromDisplayID()` nVidia API.
    Also note that, on startup, we do read from these values to find what the current nVidia
    brightness was set to.
+5. If your display supports it (not all do), we also provide means of switching/restoring
+   inputs through [VCP](https://en.wikipedia.org/wiki/Monitor_Control_Command_Set), so that
+   you can conveniently switch your monitor to a different source, through shortcuts:
+   `Win`+`Shift`+`PageUp`, `Win`+`Shift`+`PageDn` and `Win`+`Shift`+`Home`. Note that, with
+   some displays, VCP detection can take some time (multiple minutes), but once complete,
+   you should see the name of the available inputs (e.g. "DP1", "HDMI2") in the _Inputs_
+   _Control_ submenu.
+6. If you have multiple displays, you can also switch the display shorcuts apply to (except
+   for the `Win`+`Shift`+`End` one, that applies to **all** connected displays) by using
+   `Win`+`Shift`+`,` and `Win`+`Shift`+`.`.
 
 
 ## Mini FAQ
@@ -55,6 +67,22 @@ might also find useful for you, but which I am not planning to expand for your s
 
 Because the output looks atrocious if you go above 50% in the control panel, so we do what
 nVidia should have been doing and set our brightness range where it actually belongs.
+
+### Why did you default to using numpad keys? What if I don't have a numpad!
+
+We made this deliberate decision because most people who don't have a numpad would be using
+laptops, where brightness controls are provided through different means. And again, this
+software is designed for our usage workflow, where using the numpad keys makes the most
+sense. Finally, if you don't have a numpad, you can always switch to using the internet keys
+or `Alt`-`←` and  `Alt`-`→` shortcuts.
+
+### What does "Wake up to Home" do?
+
+**If** your display supports VCP, it attempts to restore the input on wake from sleep to
+what is was before the computer was put in standby. This can be useful if you put your
+computer to sleep, then switched to a different monitor input to access a different system
+and, now that you are done with it, you want to restore to your main system's video output.
+"Home" should be seen as the main active monitor input for your current system.
 
 ### Do you plan to ...?
 

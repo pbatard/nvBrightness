@@ -29,7 +29,7 @@ jobs:
 
     strategy:
       matrix:
-        TARGET_PLATFORM: [x64, x86]
+        TARGET_PLATFORM: [x64]
 
     steps:
     - name: Checkout repository
@@ -44,8 +44,8 @@ jobs:
       shell: cmd
       run: |
         msbuild ${{ env.FRIENDLY_NAME }}.sln /m /p:Configuration=${{ env.CONFIGURATION }},Platform=${{ matrix.TARGET_PLATFORM }},ForceImportBeforeCppTargets=%GITHUB_WORKSPACE%\.vs\Generate.PDB.props
-        move .\${{ matrix.TARGET_PLATFORM }}\Release\${{ env.FRIENDLY_NAME }}.exe .\${{ env.FRIENDLY_NAME }}_${{ matrix.TARGET_PLATFORM }}.exe
-        move .\${{ matrix.TARGET_PLATFORM }}\Release\${{ env.FRIENDLY_NAME }}.pdb .\${{ env.FRIENDLY_NAME }}_${{ matrix.TARGET_PLATFORM }}.pdb
+        move .\${{ matrix.TARGET_PLATFORM }}\Release\${{ env.FRIENDLY_NAME }}.exe .\${{ env.FRIENDLY_NAME }}.exe
+        move .\${{ matrix.TARGET_PLATFORM }}\Release\${{ env.FRIENDLY_NAME }}.pdb .\${{ env.FRIENDLY_NAME }}.pdb
 
     - name: Display SHA-256
       run: sha256sum ./*.exe
@@ -58,14 +58,3 @@ jobs:
         path: |
           ./*.exe
           ./*.pdb
-
-  Extra-Step-To-Merge-Artifacts-Thanks-To-Upload-Artifact-v4-Breaking-Backwards-Compatibility:
-    runs-on: windows-latest
-    needs: VS2022-Build
-    steps:
-      - name: Merge Artifacts
-        uses: actions/upload-artifact/merge@v4
-        if: ${{ github.event_name == 'push' }}
-        with:
-          name: nvBrightness
-          delete-merged: true

@@ -1,10 +1,10 @@
 /*
- * Curated list of EDID/PNP-ID 3-letter code to *VERY SHORT* vendor string
+ * Curated list of EDID/PNP-ID 3-letter code to *CONDENSED* vendor string
  *
  * Based on https://github.com/haiku/haiku/blob/master/src/preferences/screen/Vendors.h
  * and evolved from https://uefi.org/PNP_ID_List.
  *
- * Copyright © 2025 Pete Batard <pete@akeo.ie>
+ * Copyright © 2025 Pete Batard <pete@akeo.ie> - MIT license (this specific file).
  *
  * ------------------------------------------------------------------------------------------
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this
@@ -32,12 +32,13 @@
  * from this list, since we return the 3 letter code if we can't find a vendor in the list.
  *
  * Also, VERY IMPORTANT NOTE, this list is heavily modified from the UEFI Forum/Haiku one
- * as it is aimed at providing a *VERY SHORT* user-friendly vendor name that can help folks
- * identify the manufacturer of their devices (typically a monitor). The idea is that if
- * the end users type the vendor name we return along with the name of their device in a
- * search engine, they *should* be able to find the company that manufactured it.
- * In short, the user does *NOT* care if it's an "Apple Computers, GmbH (Europe) iDisplay".
- * All they will care about is that it's reported as an "Apple iDisplay".
+ * as it is aimed at providing a SUPER SHORT "one word" vendor name that'll help folks
+ * identify the manufacturer of their devices (typically a monitor). The idea is that, if
+ * the end user types the name we return along with the type of their device in a search
+ * engine, they *should* be able to locate the company that manufactured it.
+ * In other words, and unlike the original entries from UEFI/PNP, this file postulates that
+ * the user will *NOT* care that it's really an "Apple Computers, GmbH (Europe) iDisplay".
+ * All they will care about is that it's reported as "Apple iDisplay".
  *
  * We have also purposefully removed vendor names that are too long and difficult to shorten
  * for the end-user, such "Applied Creative Technology", to only report their abbreviation.
@@ -52,7 +53,6 @@
 
 using namespace std;
 
-// The things one need to do in C++ to initialize a constant static map...
 static const pair<const string, const string> values[] = {
 	{ "AAA", "Avolites" },
 	{ "AAE", "Anatek" },
@@ -161,7 +161,7 @@ static const pair<const string, const string> values[] = {
 	{ "AML", "Anderson" },
 	{ "AMN", "Amimon" },
 	{ "AMO", "Amino" },
-	{ "AMR", "AmTRAN" },
+	{ "AMR", "AmTran" },
 	{ "AMS", "Armstel" },
 	{ "ANA", "Anakron" },
 	{ "ANC", "Ancot" },
@@ -771,7 +771,7 @@ static const pair<const string, const string> values[] = {
 	{ "FIL", "Forefront" },
 	{ "FIN", "Finecom" },
 	{ "FIR", "Chaplet" },
-	{ "FIS", "FLY-IT" },
+	{ "FIS", "FlyIt" },
 	{ "FIT", "Feature" },
 	{ "FJC", "Fujitsu" },
 	{ "FJS", "Fujitsu " },
@@ -865,7 +865,7 @@ static const pair<const string, const string> values[] = {
 	{ "GRV", "Gravis" },
 	{ "GRY", "RGray" },
 	{ "GSB", "Nippondenchi" },
-	{ "GSM", "Goldstar" },
+	{ "GSM", "LG" },
 	{ "GSN", "Grandstream" },
 	{ "GSY", "Grossenbacher" },
 	{ "GTC", "Graphtec" },
@@ -1771,7 +1771,7 @@ static const pair<const string, const string> values[] = {
 	{ "RSH", "ADC" },
 	{ "RSI", "Rampage" },
 	{ "RSN", "Radiospire" },
-	{ "RSQ", "R Squared" },
+	{ "RSQ", "R-Squared" },
 	{ "RSR", "Richsound" },
 	{ "RSS", "Rockwell" },
 	{ "RSV", "RossVideo" },
@@ -1853,7 +1853,7 @@ static const pair<const string, const string> values[] = {
 	{ "SHC", "ShibaSoku" },
 	{ "SHG", "Goldammer" },
 	{ "SHP", "Sharp" },
-	{ "SHR", "DigitalDiscovery" },
+	{ "SHR", "DigitalDisc" },
 	{ "SHT", "ShinHoTech" },
 	{ "SHU", "Shure" },
 	{ "SIA", "Siemens" },
@@ -2199,7 +2199,7 @@ static const pair<const string, const string> values[] = {
 	{ "VCC", "Virtual" },
 	{ "VCE", "VARCem" },
 	{ "VCI", "VistaCom" },
-	{ "VCJ", "JVC" },	// How the frig is "JVC" not "JVC" when "JVC" is available?
+	{ "VCJ", "JVC" },
 	{ "VCM", "Vector" },
 	{ "VCX", "VConex" },
 	{ "VDA", "JVC" },
@@ -2299,8 +2299,9 @@ static const pair<const string, const string> values[] = {
 	{ "WYR", "WyreStorm" },
 	{ "WYS", "Myse" },
 	{ "WYT", "Wooyoung" },
-	{ "XAD", "Alpha Data" },
-	{ "XFG", "Jan Strapko" },
+	{ "WYU", "WeylandYutani" },
+	{ "XAD", "AlphaData" },
+	{ "XFG", "JanStrapko" },
 	{ "XFO", "Exfo" },
 	{ "XIN", "Xinex" },
 	{ "XIO", "Xiotech" },

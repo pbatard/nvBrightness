@@ -375,7 +375,7 @@ static void CreateSubmenu()
 	settings.active_device_id = display->GetDeviceId();
 
 	// Create the menu data
-	submenu.push_back({ .text = L"Display to apply shortcuts:\t［⊞］［Shift］［,］ / ［.］" });
+	submenu.push_back({ .text = L"Active display:\t［⊞］［Shift］［,］ / ［.］" });
 	for (auto i = 0; (display = displays.GetDisplay(i)) != nullptr; i++) {
 		submenu.push_back({
 			.text = display->GetDisplayName(),
@@ -390,12 +390,12 @@ static void CreateSubmenu()
 	// Update the menu entries to add/remove the input names
 	if (display->GetHomeInput() == 0) {
 		_snwprintf_s(home_input, ARRAYSIZE(home_input), _TRUNCATE, L"Home input\t［⊞］［Shift］［Home］");
-		_snwprintf_s(wake_input, ARRAYSIZE(wake_input), _TRUNCATE, L"Wake up to home");
+		_snwprintf_s(wake_input, ARRAYSIZE(wake_input), _TRUNCATE, L"Wake up to Home");
 	} else {
 		_snwprintf_s(home_input, ARRAYSIZE(home_input), _TRUNCATE,
 			L"Home input  (%hs)\t［⊞］［Shift］［Home］", nvDisplay::InputToString(display->GetHomeInput()));
 		_snwprintf_s(wake_input, ARRAYSIZE(wake_input), _TRUNCATE,
-			L"Wake up to home (%hs)", nvDisplay::InputToString(display->GetHomeInput()));
+			L"Wake up to Home (%hs)", nvDisplay::InputToString(display->GetHomeInput()));
 	}
 	if (display->GetNumberOfInputs() <= 1) {
 		_snwprintf_s(next_input, ARRAYSIZE(next_input), _TRUNCATE, L"Next input\t［⊞］［Shift］［PgUp］");
