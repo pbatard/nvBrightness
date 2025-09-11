@@ -37,6 +37,8 @@ public:
 	bool Update();
 	nvDisplay* GetDisplay(size_t index);
 	nvDisplay* GetDisplay(const wchar_t* device_id);
+	nvDisplay* GetDisplayWithFallback(const wchar_t* device_id) { nvDisplay* display = GetDisplay(device_id);
+		return (display != nullptr) ? display : GetDisplay((size_t)0); };
 	nvDisplay* GetNextDisplay(const wchar_t* device_id);
 	nvDisplay* GetPrevDisplay(const wchar_t* device_id);
 };

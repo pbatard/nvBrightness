@@ -66,7 +66,6 @@ public:
 	uint8_t GetHomeInput() { return home_input; };
 	uint8_t GetNextInput();
 	uint8_t GetPrevInput();
-	void SaveHomeInput() { uint8_t input = GetMonitorInput(); if (input != 0) home_input = input; };
 	uint8_t GetMonitorInput();
 	uint8_t SetMonitorInput(uint8_t);
 	PHYSICAL_MONITOR* GetFirstPhysicalMonitor() { return (physical_monitors.size() == 0) ? NULL : &physical_monitors[0]; };

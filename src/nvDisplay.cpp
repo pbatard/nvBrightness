@@ -165,7 +165,7 @@ uint32_t nvDisplay::GetLuid()
 	return ((uint32_t*)&guid)[1] ^ 0xf0000000;
 }
 
-bool nvDisplay::CheckLuidChange()
+bool nvDisplay::UpdateLuids()
 {
 	uint32_t current_luid = GetLuid();
 	bool luid_changed = (current_luid != active_luid);

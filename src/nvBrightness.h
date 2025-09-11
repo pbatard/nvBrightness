@@ -67,7 +67,7 @@ enum {
 	hkDecreaseBrightnessAlt,
 	hkIncreaseBrightnessAlt,
 	hkPowerOffMonitor,
-	hkRestoreInput,
+	hkHomeInput,
 	hkPreviousInput,
 	hkNextInput,
 	hkPreviousMonitor,

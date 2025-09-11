@@ -76,13 +76,15 @@ software is designed for our usage workflow, where using the numpad keys makes t
 sense. Finally, if you don't have a numpad, you can always switch to using the internet keys
 or `Alt`-`←` and  `Alt`-`→` shortcuts.
 
-### What does "Wake up to Home" do?
+### What does "Resume to Home" do?
 
-**If** your display supports VCP, it attempts to restore the input on wake from sleep to
-what is was before the computer was put in standby. This can be useful if you put your
-computer to sleep, then switched to a different monitor input to access a different system
-and, now that you are done with it, you want to restore to your main system's video output.
-"Home" should be seen as the main active monitor input for your current system.
+**If** your display supports VCP, it attempts to restore your monitor's input, on wake from
+sleep or power up, to what it was the last time you ran the application. This can be useful
+if, say, you want to access another system that is plugged to your active monitor but uses
+a different video input, and want to ensure that, once you are done with that other system
+and power the original computer back on again, the monitor's input will automatically switch
+back to it. In other words, "Home" should be considered as the video input for the system
+where this instance of nvBrightness is running.
 
 ### Do you plan to ...?
 

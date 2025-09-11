@@ -45,7 +45,7 @@ public:
 	wchar_t* GetDisplayName() { return display_name.data(); };
 	float GetBrightness();
 	bool UpdateGamma();
-	bool CheckLuidChange();
+	bool UpdateLuids();
 	void ChangeBrightness(float);
 	void LoadColorSettings();
 	void SaveColorSettings();
