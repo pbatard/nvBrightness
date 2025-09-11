@@ -31,6 +31,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
+#include <shlobj.h>
 #include <commctrl.h>
 #include <initguid.h>
 #include <ntddvdeo.h>
@@ -40,6 +41,9 @@
 
 #include <string>
 #include <list>
+#include <format>
+#include <fstream>
+#include <chrono>
 
 using namespace std;
 
@@ -72,6 +76,7 @@ typedef struct {
 	bool enabled;
 	bool autostart;
 	bool use_alternate_keys;
+	bool log_to_file;
 	bool resume_to_last_input;
 	float increment;
 	const wchar_t* active_device_id;
@@ -83,11 +88,13 @@ GLOBAL_TRAY_INSTANCE;
 wchar_t *APPLICATION_NAME = NULL, *COMPANY_NAME = NULL;	// Needed for registry.h
 
 static version_t version = { 0 };
-static settings_t settings = { true, false, false, false, 0.5f, L"" };
+static settings_t settings = { true, false, false, false, false, 0.5f, L"" };
+static ofstream log_file;
 static vector<struct tray_menu> submenu;
 static int submenu_index = 0;
 static struct tray tray = { 0 };
 static nvList displays;
+static wchar_t app_data_dir[MAX_PATH] = L"";
 // The following string buffers are modified to display the input names
 static wchar_t home_input[64] = L"Home input\t［⊞］［Shift］［Home］";
 static wchar_t next_input[64] = L"Next input\t［⊞］［Shift］［PgUp］";
@@ -95,15 +102,19 @@ static wchar_t prev_input[64] = L"Prev input\t［⊞］［Shift］［PgDn］";
 static wchar_t wake_input[64] = L"Wake up to Home";
 
 // Logging
-void logger(const char* format, ...)
+void logger(const char* fmt, ...)
 {
 	static char log_msg[512];
 
 	va_list argp;
-	va_start(argp, format);
-	vsnprintf_s(log_msg, sizeof(log_msg), _TRUNCATE, format, argp);
+	va_start(argp, fmt);
+	vsnprintf_s(log_msg, sizeof(log_msg), _TRUNCATE, fmt, argp);
 	va_end(argp);
-	OutputDebugStringA(log_msg);
+	if (settings.log_to_file) {
+		log_file << format("{:%Y-%m-%d %X}", chrono::system_clock::now()) << ": " << log_msg;
+		log_file.flush();
+	} else
+		OutputDebugStringA(log_msg);
 }
 
 // Helper functions
@@ -140,8 +151,8 @@ static bool RegisterHotKeys(void)
 	bool b = true;
 	b &= tray_register_hotkey(hkPowerOffMonitor, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_END);
 	b &= tray_register_hotkey(hkRestoreInput, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_HOME);
-	b &= tray_register_hotkey(hkNextInput, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_NEXT);
-	b &= tray_register_hotkey(hkPreviousInput, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_PRIOR);
+	b &= tray_register_hotkey(hkNextInput, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_PRIOR);
+	b &= tray_register_hotkey(hkPreviousInput, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_NEXT);
 	b &= tray_register_hotkey(hkNextMonitor, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_OEM_PERIOD);
 	b &= tray_register_hotkey(hkPreviousMonitor, MOD_WIN | MOD_SHIFT | MOD_NOREPEAT, VK_OEM_COMMA);
 
@@ -207,8 +218,6 @@ static void AboutCallback(struct tray_menu* item)
 	wchar_t project[128] = L"";
 	wchar_t release_url[64] = L"";
 
-	(void)item;
-
 	_snwprintf_s(title, ARRAYSIZE(title), _TRUNCATE, L"About %s", version.ProductName);
 	_snwprintf_s(header, ARRAYSIZE(header), _TRUNCATE, L"%s v%d.%d", version.ProductName,
 		version.fixed->dwProductVersionMS >> 16, version.fixed->dwProductVersionMS & 0xffff);
@@ -272,7 +281,6 @@ static void PauseCallback(struct tray_menu* item)
 
 static void PowerOffCallback(struct tray_menu* item)
 {
-	(void)item;
 	SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
 }
 
@@ -337,19 +345,16 @@ static void AutoStartCallback(struct tray_menu* item)
 
 static void IncreaseBrightnessCallback(struct tray_menu* item)
 {
-	(void)item;
 	tray_simulate_hottkey(hkIncreaseBrightness);
 }
 
 static void DecreaseBrightnessCallback(struct tray_menu* item)
 {
-	(void)item;
 	tray_simulate_hottkey(hkDecreaseBrightness);
 }
 
 static void ExitCallback(struct tray_menu* item)
 {
-	(void)item;
 	tray_exit();
 }
 
@@ -670,16 +675,18 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		goto out;
 	}
 
-	// Build the display list
-	displays.Update();
-
 	// Read the settings
 	settings.use_alternate_keys = (ReadRegistryKey32(HKEY_CURRENT_USER, L"UseAlternateKeys") != 0);
 	settings.resume_to_last_input = (ReadRegistryKey32(HKEY_CURRENT_USER, L"ResumeToLastInput") != 0);
 	_snwprintf_s(key_name, ARRAYSIZE(key_name), _TRUNCATE, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run\\%s", version.ProductName);
 	settings.autostart = (ReadRegistryKeyStr(HKEY_CURRENT_USER, key_name)[0] != 0);
 	settings.active_device_id = ReadRegistryKeyStr(HKEY_CURRENT_USER, L"ActiveDisplay");
+	settings.log_to_file = (ReadRegistryKey32(HKEY_CURRENT_USER, L"LogToFile") != 0);
+	if (settings.log_to_file && SHGetSpecialFolderPathW(NULL, app_data_dir, CSIDL_LOCAL_APPDATA, FALSE))
+		log_file.open(wstring(app_data_dir) + L"\\nvBrightness.log", ofstream::out | ios::app);
 
+	// Build the display list
+	displays.Update();
 
 	// Get the selected active display
 	display = displays.GetDisplay(settings.active_device_id);
@@ -754,6 +761,8 @@ out:
 	displays.Clear();
 	NvExit();
 	free(version.data);
+	if (settings.log_to_file)
+		log_file.close();
 #ifdef _DEBUG
 	// NB: You don't want to use _CrtDumpMemoryLeaks() with C++.
 	// See: https://stackoverflow.com/a/5266164/1069307

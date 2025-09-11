@@ -59,6 +59,7 @@ static vector<string> SplitByWhitespace(const string& s)
 const char* nvMonitor::InputToString(uint8_t input)
 {
 	switch (input) {
+	case 0x00: return "Invalid";
 	case 0x01: return "VGA1";
 	case 0x02: return "VGA2";
 	case 0x03: return "DVI1";
