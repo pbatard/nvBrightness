@@ -105,21 +105,29 @@ static wchar_t home_input[64] = L"Home input\t［⊞］［Shift］［Home］";
 static wchar_t next_input[64] = L"Next input\t［⊞］［Shift］［PgUp］";
 static wchar_t prev_input[64] = L"Prev input\t［⊞］［Shift］［PgDn］";
 static wchar_t wake_input[64] = L"Resume to Home";
+static mutex log_mutex;
 
 // Logging
 void logger(const char* fmt, ...)
 {
+	static bool last_message_had_linebreak = true;
 	static char log_msg[512];
 
+	log_mutex.lock();
 	va_list argp;
 	va_start(argp, fmt);
 	vsnprintf_s(log_msg, sizeof(log_msg), _TRUNCATE, fmt, argp);
 	va_end(argp);
 	if (settings.log_to_file) {
-		log_file << format("{:%Y-%m-%d %X}", chrono::system_clock::now()) << ": " << log_msg;
+		if (last_message_had_linebreak)
+			log_file << format("{:%Y-%m-%d %X}", chrono::current_zone()->to_local(chrono::system_clock::now())) << ": ";
+		if (strlen(log_msg) >= 1)
+			last_message_had_linebreak = (log_msg[strlen(log_msg) - 1] == '\n');
+		log_file << log_msg;
 		log_file.flush();
 	} else
 		OutputDebugStringA(log_msg);
+	log_mutex.unlock();
 }
 
 // Helper functions
@@ -393,7 +401,7 @@ static void CreateSubmenu()
 	// Try to reselect the display, or reset to first active
 	display = displays.GetDisplayWithFallback(settings.active_device_id);
 	if (display == nullptr) {
-		logger("No active displays!\n");
+		logger("ERROR: No active displays!\n");
 		submenu.push_back({ .text = NULL });
 		if (tray.menu != NULL && submenu_index != 0) {
 			tray.menu[submenu_index].disabled = true;

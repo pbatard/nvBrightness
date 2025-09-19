@@ -21,17 +21,7 @@
 
 // Using a GUID for the tray icon allows the executable to be moved around or change version
 // without requiring the user to go through the taskbar settings to re-enable the icon.
-#ifdef _DEBUG
-// Note that we use two GUIDs due to a Microsoft UTTERLY MADDENING BUG, where Windows silently
-// drops the tray icon, for some arcane reason that I really am NOT ready to waste DAYS on.
-// And it only happens to some versions of the executable, independently of their location and
-// REGARDLESS OF WHETHER THEY WERE RECOMPILED FROM THE SAME SOURCE AS UNAFFECTED EXECUTABLES!!!
-// So, Microsoft, you can go screw yourselves on that one, as I have better things to do than
-// chase after a stupid Windows bug/limitation/whatever.
-#define TRAY_ICON_GUID { 0x64397973, 0xa694, 0x4640, { 0x80, 0x26, 0x96, 0x04, 0x46, 0x75, 0x00, 0x2c } }
-#else
 #define TRAY_ICON_GUID { 0x64397973, 0xa694, 0x4640, { 0x80, 0x26, 0x96, 0x04, 0x46, 0x75, 0x00, 0x2b } }
-#endif
 
 // VCP control code to read/switch a monitor's input source
 #define VCP_INPUT_SOURCE            0x60

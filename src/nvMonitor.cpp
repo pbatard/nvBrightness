@@ -122,27 +122,31 @@ nvMonitor::nvMonitor(uint32_t display_id)
 	// Get the monitor data associated with the display
 	GetMonitorData();
 
-	if (!physical_monitors.empty()) {
-		DWORD input = 0, max = 0;
-		steady_clock::time_point begin = steady_clock::now();
-		while (!GetVCPFeatureAndVCPFeatureReply(physical_monitors.at(0).hPhysicalMonitor, VCP_INPUT_SOURCE, NULL, &input, &max)) {
-			auto elapsed = duration_cast<milliseconds>(steady_clock::now() - begin);
-			if (elapsed.count() > VCP_FEATURE_MAX_RETRY_TIME) {
-				logger("Could not retrieve monitor input: error 0x%X\n", GetLastError());
-				goto parse_edid;
-			}
-		}
-		// Store the "home" input, i.e. the input the monitor was using when we started the app
-		home_input = (uint8_t)input;
-		if (home_input != 0) {
-			// If we could read the current input, we assume that VCP is supported
-			supports_vcp = true;
-			// Start a an asynchronous task to get this monitor's available inputs
-			allowed_inputs_task = async(launch::async, &nvMonitor::GetAllowedInputs, this);
+	if (physical_monitors.empty()) {
+		logger("No physical monitor detected for %s\n", nv_display_name);
+		return;
+	}
+
+	DWORD input = 0, max = 0;
+	steady_clock::time_point begin = steady_clock::now();
+	while (!GetVCPFeatureAndVCPFeatureReply(physical_monitors.at(0).hPhysicalMonitor, VCP_INPUT_SOURCE, NULL, &input, &max)) {
+		auto elapsed = duration_cast<milliseconds>(steady_clock::now() - begin);
+		if (elapsed.count() > VCP_FEATURE_MAX_RETRY_TIME) {
+			logger("Could not retrieve monitor input for %s: Error 0x%X\n", nv_display_name, GetLastError());
+			ParseEdid();
+			return;
 		}
 	}
 
-parse_edid:
+	// Store the "home" input, i.e. the input the monitor was using when we started the app
+	home_input = (uint8_t)input;
+	if (home_input != 0) {
+		// If we could read the current input, we assume that VCP is supported
+		supports_vcp = true;
+		// Start an asynchronous task to get this monitor's available inputs
+		allowed_inputs_task = async(launch::async, &nvMonitor::GetAllowedInputs, this);
+	}
+
 	ParseEdid();
 }
 
@@ -289,7 +293,7 @@ void nvMonitor::GetAllowedInputs()
 			return;
 		auto elapsed = duration_cast<seconds>(steady_clock::now() - begin);
 		if (elapsed.count() > VCP_CAPS_MAX_RETRY_TIME) {
-			logger("failed to get VCP capabilities for %s after %d attempts: %x\n", display_name, i, GetLastError());
+			logger("Could not get VCP capabilities for %s after %d attempts: Error 0x%08x\n", display_name, i, GetLastError());
 			return;
 		}
 	}
@@ -344,7 +348,7 @@ void nvMonitor::GetAllowedInputs()
 		logger("%s Valid input(s): %s\n", model_name.c_str(), inputs.c_str());
 
 	} else {
-		logger("Could not get VCP capabilities for %S: %x\n", display_name, GetLastError());
+		logger("Could not get VCP capabilities for %S: Error 0x%08x\n", display_name, GetLastError());
 	}
 
 out:
@@ -366,7 +370,7 @@ uint8_t nvMonitor::GetMonitorInput()
 	while (!GetVCPFeatureAndVCPFeatureReply(physical_monitor->hPhysicalMonitor, VCP_INPUT_SOURCE, NULL, &current, &max)) {
 		auto elapsed = duration_cast<milliseconds>(steady_clock::now() - begin);
 		if (elapsed.count() > VCP_FEATURE_MAX_RETRY_TIME) {
-			logger("Could not get current input: error %X\n", GetLastError());
+			logger("Could not get current input: Error 0x%08x\n", GetLastError());
 			return 0;
 		}
 	}
@@ -404,7 +408,7 @@ uint8_t nvMonitor::SetMonitorInput(uint8_t requested)
 		ret = requested;
 	} else {
 		if (!SetVCPFeature(physical_monitor->hPhysicalMonitor, VCP_INPUT_SOURCE, requested))
-			logger("Could not set input: error %X\n", GetLastError());
+			logger("Could not set input: Error 0x%08x\n", GetLastError());
 		else
 			ret = requested;
 	}
