@@ -64,8 +64,9 @@ using namespace std;
 
 #define RESTORE_INPUT_TID       2000
 #define RESTORE_GAMMA_TID       2001
-#define RESTORE_INPUT_DELAY     10000
+#define RESTORE_INPUT_DELAY     5000
 #define RESTORE_GAMMA_DELAY     3000
+#define RESTORE_INPUT_RETRIES   8
 
 // Structs
 typedef struct {
@@ -96,7 +97,7 @@ static version_t version = { 0 };
 static settings_t settings = { true, false, false, false, 0, 0.5f, L"" };
 static ofstream log_file;
 static vector<struct tray_menu> submenu;
-static int submenu_index = 0;
+static int submenu_index = 0, num_restore_attempts = 1;
 static struct tray tray = { 0 };
 static nvList displays;
 static wchar_t app_data_dir[MAX_PATH] = L"";
@@ -558,10 +559,21 @@ static bool HotkeyCallback(WPARAM wparam, LPARAM lparam)
 
 static void CALLBACK RestoreInputCallback(HWND hWnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime)
 {
+	bool restored = false;
+
 	nvDisplay* display;
-	KillTimer(hWnd, RESTORE_INPUT_TID);
-	for (auto i = 0; (display = displays.GetDisplay(i)) != nullptr; i++)
-		display->SetMonitorInput(VCP_INPUT_HOME);
+	for (auto i = 0; (display = displays.GetDisplay(i)) != nullptr; i++) {
+		auto r = display->SetMonitorInput(VCP_INPUT_HOME);
+		if (r != 0)
+			restored = true;
+	}
+	if (restored || num_restore_attempts++ > RESTORE_INPUT_RETRIES) {
+		KillTimer(hWnd, RESTORE_INPUT_TID);
+		if (restored)
+			logger("Restored monitor input after %d attempts\n", num_restore_attempts);
+		else
+			logger("Failed to restore monitor input");
+	}
 }
 
 // Callback for power events
@@ -576,6 +588,7 @@ static ULONG CALLBACK PowerEventCallback(PVOID Context, ULONG Type, PVOID Settin
 		break;
 	case PBT_APMRESUMESUSPEND:
 		logger("Resume from suspend - restoring monitor inputs\n");
+		num_restore_attempts = 1;
 		// Create a timed task set to run delayed from the time we receive the
 		// message, as the system/monitors may need a little time to get ready.
 		SetTimer(hwnd, RESTORE_INPUT_TID, RESTORE_INPUT_DELAY, RestoreInputCallback);
