@@ -451,8 +451,9 @@ static void CreateSubmenu()
 	submenu.push_back({ .text = prev_input, .disabled = (display->GetNumberOfInputs() <= 1), .cb = PreviousInputCallback });
 	submenu.push_back({ .text = NULL });
 
-	// Also update the wake to home enabled status and make sure the inputs submenu is enabled
+	// Update the submenu and make sure it is enabled along resume to home
 	if (tray.menu != NULL && submenu_index != 0) {
+		tray.menu[submenu_index].submenu = submenu.data();
 		tray.menu[submenu_index].disabled = false;
 		tray.menu[submenu_index + 1].disabled = (display->GetHomeInput() == 0);
 	}
@@ -747,17 +748,13 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 
 	// Get the selected active display
 	display = displays.GetDisplayWithFallback(settings.active_device_id);
-	if (display == nullptr) {
-		ProperMessageBox(TD_WARNING_ICON, L"No compatible displays",
-			L"A compatible display could not be detected on this system.\n"
-			"%s will now exit.\n", version.ProductName);
-		goto out;
+	if (display != nullptr) {
+		settings.active_device_id = display->GetDeviceId();
+		// Restore the last input if the active display hasn't changed and an input to restore was saved
+		if (wcscmp(ReadRegistryKeyStr(HKEY_CURRENT_USER, L"ActiveDisplay"), settings.active_device_id) == 0 &&
+			settings.last_input != 0)
+			display->SetMonitorInput(settings.last_input);
 	}
-	settings.active_device_id = display->GetDeviceId();
-
-	// Restore the last input if the active display hasn't changed and an input to restore was saved
-	if (wcscmp(ReadRegistryKeyStr(HKEY_CURRENT_USER, L"ActiveDisplay"), settings.active_device_id) == 0 && settings.last_input != 0)
-		display->SetMonitorInput(settings.last_input);
 
 	// Create the tray menu
 	CreateSubmenu();
@@ -767,7 +764,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		{ .text = L"Turn off display(s)\t［⊞］［Shift］［End］", .cb = PowerOffCallback },
 		{ .text = L"-" },
 		{ .text = L"Input controls", .submenu = submenu.data()},
-		{ .text = wake_input, .disabled = (display->GetHomeInput() == 0),
+		{ .text = wake_input, .disabled = (display == nullptr || display->GetHomeInput() == 0),
 			.checked = (settings.last_input != 0), .cb = ResumeToLastInputCallback },
 		{ .text = L"-" },
 		{ .text = L"Auto Start", .checked = settings.autostart, .cb = AutoStartCallback },
@@ -782,7 +779,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _
 		menu[0].text = L"Brightness +\t［Internet Fwd］ or ［Alt］［→］";
 		menu[1].text = L"Brightness −\t［Internet Back］ or ［Alt］［←］";
 	}
-	tray.icon =	GetCurrentIcon(display);
+	tray.icon = GetCurrentIcon(display);
 	tray.menu = menu;
 
 	// Avoid having to manually keep track of the submenu index
